@@ -20,15 +20,16 @@
 From Stdlib Require Import Zmod.
 From Stdlib Require Import List. Import ListNotations.
 
-(*
-  Bit-level notations, all living in scope `bits_scope`.
-  - `x # n` constructs an n-bit value from integer x (mod 2^n).
-  - `a =? b` is bitvector equality.
-  - `x #[ i ]` is the single-bit slice at index i.
-  - `x .[ hi , lo ]` is the inclusive slice from lo to hi.
-  - `a ++ b` concatenates `a` above `b` (note the argument order of `Zmod.app`).
-  - `+`, `-`, `*` are bitvector arithmetic modulo the bitwidth.
-*)
+(**********************************************************************************)
+(* Bit-level notations, all living in scope `bits_scope`.                         *)
+(* - `x # n` constructs an n-bit value from integer x (mod 2^n).                  *)
+(* - `a =? b` is bitvector equality.                                              *)
+(* - `x #[ i ]` is the single-bit slice at index i.                               *)
+(* - `x .[ hi , lo ]` is the inclusive slice from lo to hi.                       *)
+(* - `a ++ b` concatenates `a` above `b` (note the argument order of `Zmod.app`). *)
+(* - `+`, `-`, `*` are bitvector arithmetic modulo the bitwidth.                  *)
+(**********************************************************************************)
+
 Declare Scope bits_scope.
 Delimit Scope bits_scope with bits.
 
@@ -58,13 +59,14 @@ Section WithWidth.
   #[warnings="-notation-for-abbreviation"]
     Local Notation WC := (Z.log2_up W) (only parsing).
 
-  (*
-    Architectural state of the multiplier:
-    - `B`   : multiplicand (W bits), latched at start, constant during run
-    - `A`   : partial product and shifting multiplier (2W bits)
-    - `Cnt` : countdown cycles remaining (enough bits to count up to W)
-    - `Busy`: 1 when an operation is in progress, 0 when idle
-  *)
+  (**************************************************************************)
+  (* Architectural state of the multiplier:                                 *)
+  (* - `B`   : multiplicand (W bits), latched at start, constant during run *)
+  (* - `A`   : partial product and shifting multiplier (2W bits)            *)
+  (* - `Cnt` : countdown cycles remaining (enough bits to count up to W)    *)
+  (* - `Busy`: 1 when an operation is in progress, 0 when idle              *)
+  (**************************************************************************)
+
   Record Registers : Set :=
     mkRegisters
     { B : bits W
@@ -129,78 +131,41 @@ Section WithWidth.
   Definition Post_implies (P Q : Post) : Prop :=
     forall r t k, P r t k -> Q r t k.
 
-  Notation "P ->> Q" := (Post_implies P Q)
+  Notation "P ⊆ Q" := (Post_implies P Q)
                           (at level 80) : post_scope.
 
   Bind Scope post_scope with Post.
 
   Local Open Scope post_scope.
 
-  (* TODO kosinw: This definition relies heavily on dependent types; however,
-     since I cannot get it to run quickly I'm disable it for now. *)
+  (********************************************************************************)
+  (*   Core datapath step for the bit-serial multiplier.                          *)
+  (*   Given multiplicand `b` and current `p`:                                    *)
+  (*   - `t0` is the upper half of `p` (bits [WP-1:W]) zero-extended to W+1 bits; *)
+  (*     this provides space for the carry of the addition.                       *)
+  (*   - `t1` is either `b` (zero-extended to W+1) when the lsb `p#[0]` is 1,     *)
+  (*     or zero otherwise. This encodes the conditional add.                     *)
+  (*   - We add `t0` and `t1` (W+1 bits), then append the lower half of `a`       *)
+  (*     shifted right by one (`p.[W-1,1]`), reconstructing a new 2W-bit `a`.     *)
+  (********************************************************************************)
 
-  (**********************************************************************)
-  (* Definition cast_bits {n m : Z} (pf : n = m) (x : bits n) : bits m. *)
-  (* Proof.                                                             *)
-  (*   rewrite <- pf.                                                   *)
-  (*   exact x.                                                         *)
-  (* Defined.                                                           *)
-  (*                                                                    *)
-  (* Definition wid_t0 : (WP - 1 + 1 - W + 1 = W + 1)%Z.                *)
-  (* Proof using W.                                                     *)
-  (*   rewrite Z.sub_add.                                               *)
-  (*   rewrite <- Z.mul_pred_l.                                         *)
-  (*   replace (Z.pred 2%Z) with 1%Z by exact eq_refl.                  *)
-  (*   rewrite Z.mul_1_l.                                               *)
-  (*   exact eq_refl.                                                   *)
-  (* Defined.                                                           *)
-  (*                                                                    *)
-  (* Definition wid_p' : (W - 1 + 1 - 1 + (W + 1) = WP)%Z.              *)
-  (* Proof using W.                                                     *)
-  (*   rewrite Z.sub_add.                                               *)
-  (*   replace (W + 1)%Z with (1 + W)%Z by apply Z.add_comm.            *)
-  (*   rewrite Z.add_assoc.                                             *)
-  (*   rewrite Z.sub_add.                                               *)
-  (*   rewrite Z.add_diag.                                              *)
-  (*   exact eq_refl.                                                   *)
-  (* Defined.                                                           *)
-  (*                                                                    *)
-  (* Definition compute_p' (b : bits W) (p : bits WP) : bits WP.        *)
-  (* Proof using W.                                                     *)
-  (*   refine (                                                         *)
-  (*       let t0 := cast_bits wid_t0 (0#1 ++ p.[WP-1,W]) in            *)
-  (*       let t1 := if p#[0] =? 1#1 then 0#1 ++ b else 0#(W+1) in      *)
-  (*       cast_bits wid_p' ((t0 + t1) ++ p.[W-1,1])                    *)
-  (*     ).                                                             *)
-  (* Defined.                                                           *)
-  (**********************************************************************)
+  Definition compute_a' (b : bits W) (a : bits WP) : bits WP :=
+    let t0 := zext (W+1) a.[WP-1,W] in
+    let t1 := if a#[0] =? 1#1 then zext (W+1) b else 0#(W+1) in
+    zext WP ((t0 + t1) ++ a.[W-1,1]).
 
-  (*
-    Core datapath step for the bit-serial multiplier.
-    Given multiplicand `b` and current `p`:
-    - `t0` is the upper half of `p` (bits [WP-1:W]) zero-extended to W+1 bits;
-      this provides space for the carry of the addition.
-    - `t1` is either `b` (zero-extended to W+1) when the lsb `p#[0]` is 1,
-      or zero otherwise. This encodes the conditional add.
-    - We add `t0` and `t1` (W+1 bits), then append the lower half of `p`
-      shifted right by one (`p.[W-1,1]`), reconstructing a new 2W-bit `p`.
-  *)
-  Definition compute_a' (b : bits W) (p : bits WP) : bits WP :=
-    let t0 := zext (W+1) p.[WP-1,W] in
-    let t1 := if p#[0] =? 1#1 then zext (W+1) b else 0#(W+1) in
-    zext WP ((t0 + t1) ++ p.[W-1,1]).
+  (*********************************************************************)
+  (*   One machine cycle.                                              *)
+  (*   - When idle (`Busy = 0`):                                       *)
+  (*       * If input `(a,b)` is present, load `A <- a`, `B <- b`,     *)
+  (*         set `Cnt <- W-1`, and go busy. Emit IO and leak events.   *)
+  (*       * Else remain idle.                                         *)
+  (*   - When busy:                                                    *)
+  (*       * Update `A <- compute_a' B P`.                             *)
+  (*       * Decrement `Cnt`; when it reaches 0, finish the operation, *)
+  (*         drive `IOOut A` and deassert `Busy`.                      *)
+  (*********************************************************************)
 
-  (*
-    One machine cycle.
-    - When idle (`Busy = 0`):
-        * If input `(a,b)` is present, load `P <- a`, `B <- b`,
-          set `Cnt <- W-1`, and go busy. Emit IO and leak events.
-        * Else remain idle.
-    - When busy:
-        * Update `P <- compute_p' B P`.
-        * Decrement `Cnt`; when it reaches 0, finish the operation,
-          drive `IOOut P` and deassert `Busy`.
-  *)
   Definition cycle (r : Registers) (i : option (bits W * bits W))
     : Registers * IOEvent * LeakageEvent :=
     if r.(Busy) =? 0#1
@@ -224,40 +189,44 @@ Section WithWidth.
         (mkRegisters r.(B) p' cnt' busy', out', leak')
       ).
 
-  Reserved Notation "s ⇓ Q" (at level 71, left associativity).
-
   Local Open Scope list_scope.
+
+  Reserved Notation "c ∕ s ⇓ Q" (at level 70, no associativity).
 
   Inductive eval : Cmd -> Registers -> IOTrace -> LeakageTrace -> Post -> Prop :=
   | EvalSeq : forall c1 c2 r t k Q1 Q,
-      (c1, r, t, k) ⇓ Q1 ->
-      (forall r' t' k', Q1 r' t' k' -> eval c2 r' t' k' Q) ->
-      (c1 ; c2, r, t, k) ⇓ Q
-
+      c1 ∕ (r, t, k) ⇓ Q1 ->
+      (forall r' t' k', Q1 r' t' k' -> c2 ∕ (r', t', k') ⇓ Q) ->
+      c1;c2 ∕ (r, t, k) ⇓ Q
   | EvalValid : forall a b r t k Q r' io leak,
       cycle r (Some (a, b)) = (r', io, leak) ->
       Q r' (t ++ [io]) (k ++ [leak]) ->
-      (CmdValid a b, r, t, k) ⇓ Q
-
+      CmdValid a b ∕ (r, t, k) ⇓ Q
   | EvalSkip : forall r t k Q r' io leak,
       cycle r None = (r', io, leak) ->
       Q r' (t ++ [io]) (k ++ [leak]) ->
-      (CmdSkip, r, t, k) ⇓ Q
+      CmdSkip ∕ (r, t, k) ⇓ Q
 
-  where "s ⇓ Q" := (let '(c, r, t, k) := s in eval c r t k Q).
+  where "c ∕ s ⇓ Q" := (let '(r, t, k) := s in eval c r t k Q).
 
-  Lemma weaken_post : forall s P Q,
-      P ->> Q -> s ⇓ Q -> s ⇓ P.
+  Theorem consequence_post : forall c s Q Q',
+      (c ∕ s ⇓ Q) -> Q ⊆ Q' -> (c ∕ s ⇓ Q').
   Proof.
-    intros; simpl.
-    destruct s as [[[c r] t] k]; subst.
-    inversion H0; subst.
-    - admit.
-    - econstructor.
-      eassumption.
-      unfold Post_implies in H.
+    unfold Post_implies; intros; simpl.
+    destruct s as [[r t] k]; subst.
+    inversion H; subst;
+      try solve
+        [repeat (intros; simpl;
+                 match goal with
+                 | [ H : context[?Q _ _ _] |- context[?Q _ _ _] ] => apply H
+                 | [ |- context[eval _ _ _ _] ] => econstructor
+                 | [ |- context[cycle] ] => eassumption
+                 end)].
 
-  Example ex_eval1 : (skip%cmd, R0, [], []) ⇓ (fun _ _ _ => True).
+
+
+
+  Example ex_eval1 : skip ∕ (R0,[],[]) ⇓ (fun _ _ _ => True).
   Proof using W.
     econstructor.
     econstructor.
