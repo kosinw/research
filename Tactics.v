@@ -20,12 +20,19 @@ Ltac same_structure x y :=
   match x with
   | ?f ?a1 ?b1 ?c1 ?d1 =>
       match y with
-      | f ?a2 ?b2 ?c2 ?d2 => same_structure a1 a2; same_structure b1 b2; same_structure c1 c2; same_structure d1 d2
+      | f ?a2 ?b2 ?c2 ?d2 =>
+          same_structure a1 a2;
+          same_structure b1 b2;
+          same_structure c1 c2;
+          same_structure d1 d2
       | _ => fail 2
       end
   | ?f ?a1 ?b1 ?c1 =>
       match y with
-      | f ?a2 ?b2 ?c2 => same_structure a1 a2; same_structure b1 b2; same_structure c1 c2
+      | f ?a2 ?b2 ?c2 =>
+          same_structure a1 a2;
+          same_structure b1 b2;
+          same_structure c1 c2
       | _ => fail 2
       end
   | ?f ?a1 ?b1 =>
@@ -42,12 +49,19 @@ Ltac same_structure x y :=
       match y with
       | ?f ?a1 ?b1 ?c1 ?d1 =>
           match x with
-          | f ?a2 ?b2 ?c2 ?d2 => same_structure a1 a2; same_structure b1 b2; same_structure c1 c2; same_structure d1 d2
+          | f ?a2 ?b2 ?c2 ?d2 =>
+              same_structure a1 a2;
+              same_structure b1 b2;
+              same_structure c1 c2;
+              same_structure d1 d2
           | _ => fail 2
           end
       | ?f ?a1 ?b1 ?c1 =>
           match x with
-          | f ?a2 ?b2 ?c2 => same_structure a1 a2; same_structure b1 b2; same_structure c1 c2
+          | f ?a2 ?b2 ?c2 =>
+              same_structure a1 a2;
+              same_structure b1 b2;
+              same_structure c1 c2
           | _ => fail 2
           end
       | ?f ?a1 ?b1 =>
@@ -96,12 +110,13 @@ Ltac instantiate_obviouses :=
     end.
 
 Lemma indN: forall (P: N -> Prop),
-    P 0%N ->                                 (* base case to prove *)
-    (forall n: N, P n -> P (n + 1)%N) ->     (* inductive case to prove *)
-    forall n, P n.                           (* conclusion to enjoy *)
+    P 0%N ->
+    (forall n: N, P n -> P (n + 1)%N) ->
+    forall n, P n.
 Proof. setoid_rewrite N.add_1_r. exact N.peano_ind. Qed.
 
-Ltac induct e := (induction e using indN || inductN e || dependent induction e); instantiate_obviouses.
+Ltac induct e :=
+  (induction e using indN || inductN e || dependent induction e); instantiate_obviouses.
 
 Ltac invert' H := inversion H; clear H; subst.
 
@@ -125,31 +140,32 @@ Ltac invert0 e := invert e; fail.
 Ltac invert1 e := invert0 e || (invert e; []).
 Ltac invert2 e := invert1 e || (invert e; [|]).
 
-Ltac simplify := repeat match goal with
-                   | [ H : True |- _ ] => clear H
-                   end;
-                 repeat progress
-                   (simpl in *;
-                    intros;
-                    try autorewrite with core in *).
+Ltac simplify :=
+  repeat match goal with
+    | [ H : True |- _ ] => clear H
+    end;
+  repeat progress
+    (simpl in *;
+     intros;
+     try autorewrite with core in *).
 
 Ltac propositional := intuition idtac.
 
-Ltac linear_arithmetic := intros;
-                          repeat match goal with
-                            | [ |- context[max ?a ?b] ] =>
-                                let Heq := fresh "Heq" in destruct (Nat.max_spec a b) as [[? Heq] | [? Heq]];
-                                                          rewrite Heq in *; clear Heq
-                            | [ _ : context[max ?a ?b] |- _ ] =>
-                                let Heq := fresh "Heq" in destruct (Nat.max_spec a b) as [[? Heq] | [? Heq]];
-                                                          rewrite Heq in *; clear Heq
-                            | [ |- context[min ?a ?b] ] =>
-                                let Heq := fresh "Heq" in destruct (Nat.min_spec a b) as [[? Heq] | [? Heq]];
-                                                          rewrite Heq in *; clear Heq
-                            | [ _ : context[min ?a ?b] |- _ ] =>
-                                let Heq := fresh "Heq" in destruct (Nat.min_spec a b) as [[? Heq] | [? Heq]];
-                                                          rewrite Heq in *; clear Heq
-                            end; lia.
+Ltac linear_arithmetic :=
+  intros; repeat match goal with
+            | [ |- context[max ?a ?b] ] =>
+                let Heq := fresh "Heq" in destruct (Nat.max_spec a b) as [[? Heq] | [? Heq]];
+                                          rewrite Heq in *; clear Heq
+            | [ _ : context[max ?a ?b] |- _ ] =>
+                let Heq := fresh "Heq" in destruct (Nat.max_spec a b) as [[? Heq] | [? Heq]];
+                                          rewrite Heq in *; clear Heq
+            | [ |- context[min ?a ?b] ] =>
+                let Heq := fresh "Heq" in destruct (Nat.min_spec a b) as [[? Heq] | [? Heq]];
+                                          rewrite Heq in *; clear Heq
+            | [ _ : context[min ?a ?b] |- _ ] =>
+                let Heq := fresh "Heq" in destruct (Nat.min_spec a b) as [[? Heq] | [? Heq]];
+                                          rewrite Heq in *; clear Heq
+            end; lia.
 
 Ltac equality := intuition congruence.
 

@@ -13,9 +13,10 @@
 (*  - After W cycles, the full product is available in `P`.                 *)
 (*                                                                          *)
 (*  The state machine exposes a very small handshake-like interface via     *)
-(*  `IOEvent` and a simple leak model via `LeakageEvent`.                   *)
+(*  `IOEvent` and a simple leakage model via `LeakageEvent`.                *)
 (****************************************************************************)
 
+From Stdlib Require Import Program.Basics.
 From Research Require Import Tactics Bits.
 
 Section WithWidth.
@@ -23,7 +24,7 @@ Section WithWidth.
   Local Open Scope bits_scope.
 
   #[warnings="-notation-for-abbreviation"]
-    Local Notation WP := (Z.mul 2 W) (only parsing).
+    Local Notation WP := (Z.add W W) (only parsing).
 
   #[warnings="-notation-for-abbreviation"]
     Local Notation WC := (Z.log2_up W) (only parsing).
@@ -45,8 +46,8 @@ Section WithWidth.
   (* Architectural reset state *)
   Definition R0 : Registers := mkRegisters 0#W 0#WP 0#WC 0#1.
 
-  (* Simple leakage model. Currently only `LeakValid` is used to model a
-     leak on valid/ready-like events. Included as options in a trace. *)
+  (* Simple leakage model. Currently only `LeakValid` is used to model leakage for
+   hyperproperty proofs. *)
   Inductive LeakageEvent : Set :=
   | LeakValid
   | LeakReady
@@ -62,47 +63,18 @@ Section WithWidth.
 
   Definition IOTrace := list IOEvent.
 
+  Definition State := (Registers * IOTrace * LeakageTrace)%type.
+
+  Definition s0 : State := (R0, [], []).
+
   (* Tiny command DSL to script example scenarios. *)
   Inductive Cmd : Set :=
   | CmdValid (a b : bits W)
   | CmdSkip
   | CmdSeq (c1 c2 : Cmd).
 
-  Declare Scope cmd_scope.
-  Delimit Scope cmd_scope with cmd.
-
-  Notation "'skip'" := CmdSkip : cmd_scope.
-
-  Notation "'valid' a b" := (CmdValid a b)
-                              (at level 10, a at level 9, b at level 9) : cmd_scope.
-
-  Notation "c1 ';' c2" := (CmdSeq c1 c2)
-                            (at level 51, right associativity) : cmd_scope.
-
-  Bind Scope cmd_scope with Cmd.
-
-  Local Open Scope cmd_scope.
-
-  (* Represents a postcondition in the omnisemantics sense. Since we only really
-     care about calculating the leakage trace as some function of the IOTrace and
-     values of initial state (which will usually appear in a quantifier). *)
-  Definition Post := Registers -> IOTrace -> LeakageTrace -> Prop.
-
-  Declare Scope post_scope.
-  Delimit Scope post_scope with post.
-
-  Definition Post_implies (P Q : Post) : Prop :=
-    forall r t k, P r t k -> Q r t k.
-
-  Definition Post_holds (P : Post) (s : Registers * IOTrace * LeakageTrace) : Prop :=
-    let '(r, t, k) := s in P r t k.
-
-  Notation "P ⊆ Q" := (Post_implies P Q) (at level 80) : post_scope.
-  Notation "s ∈ Q" := (Post_holds Q s) (at level 80) : post_scope.
-
-  Bind Scope post_scope with Post.
-
-  Local Open Scope post_scope.
+  Definition skipn : positive -> Cmd :=
+    Pos.peano_rec (fun _ => Cmd) CmdSkip (fun _ recurse => CmdSeq CmdSkip recurse).
 
   (********************************************************************************)
   (*   Core datapath step for the bit-serial multiplier.                          *)
@@ -155,48 +127,107 @@ Section WithWidth.
         (mkRegisters r.(B) p' cnt' busy', out', leak')
       ).
 
-  Local Open Scope list_scope.
+  Definition inactive (r : Registers) : Prop := r.(Busy) = 0#1.
+  Definition active (r : Registers) : Prop := r.(Busy) = 1#1.
 
-  Reserved Notation "c ∕ s ⇓ Q" (at level 70, no associativity).
-
-  Inductive eval : Cmd -> Registers -> IOTrace -> LeakageTrace -> Post -> Prop :=
-  | EvalSeq : forall c1 c2 r t k Q1 Q,
-      c1 ∕ (r, t, k) ⇓ Q1 ->
-      (forall r' t' k', Q1 r' t' k' -> c2 ∕ (r', t', k') ⇓ Q) ->
-      c1 ; c2 ∕ (r, t, k) ⇓ Q
-  | EvalValid : forall a b r t k Q r' io leak,
-      cycle r (Some (a, b)) = (r', io, leak) ->
-      Q r' (t ++ [io]) (k ++ [leak]) ->
-      CmdValid a b ∕ (r, t, k) ⇓ Q
-  | EvalSkip : forall r t k Q r' io leak,
-      cycle r None = (r', io, leak) ->
-      Q r' (t ++ [io]) (k ++ [leak]) ->
-      CmdSkip ∕ (r, t, k) ⇓ Q
-
-  where "c ∕ s ⇓ Q" := (let '(r, t, k) := s in eval c r t k Q).
-
-  Ltac solve_consequence_post :=
-    repeat (match goal with
-            | [ H : context[_ ?r ?t ?k] |- context[_ ?r ?t ?k] ] => eapply H
-            | [ H : context[?Q _ _ _] |- context[?Q _ _ _] ] => eapply H
-            | [ |- context[eval _ _ _ _] ] => econstructor
-            | [ |- context[cycle] ] => eassumption
-            | [ H : context[ _ -> eval ?c ?r ?t ?k] |- eval ?c ?r ?t ?k ] => apply H
-            end; simplify).
-
-  Lemma consequence_post' : forall c s Q,
-      (c ∕ s ⇓ Q) -> forall Q', Q ⊆ Q' -> (c ∕ s ⇓ Q').
-  Proof using W.
-    intros c s Q Heval Q' Himplies.
-    unfold Post_implies in Himplies.
-    destruct s as [[r t] k].
-    induct Heval; solve_consequence_post.
-  Qed.
-
-  Theorem consequence_post : forall c s Q Q',
-      (c ∕ s ⇓ Q) -> Q ⊆ Q' -> (c ∕ s ⇓ Q').
-  Proof using W.
-    intros c s Q Q' Heval Himplies;
-    apply (consequence_post' c s Q Heval Q' Himplies).
-  Qed.
+  Lemma active_inactive : forall r, active r \/ inactive r. Admitted.
 End WithWidth.
+
+Declare Scope cmd_scope.
+Delimit Scope cmd_scope with cmd.
+
+Notation "'skip'" := CmdSkip : cmd_scope.
+
+Notation "'valid' a b" := (CmdValid a b)
+                            (at level 10, a at level 9, b at level 9) : cmd_scope.
+
+Notation "c1 ';' c2" := (CmdSeq c1 c2)
+                          (at level 51, right associativity) : cmd_scope.
+
+Bind Scope cmd_scope with Cmd.
+
+(* Represents a postcondition in the omnisemantics sense. Since we only really
+   care about calculating the leakage trace as some function of the IOTrace and
+   values of initial state (which will usually appear in a quantifier). *)
+Definition Post {W : Z} := @State W -> Prop.
+
+Declare Scope post_scope.
+Delimit Scope post_scope with post.
+
+Definition Post_implies {W : Z} (P Q : @Post W) : Prop :=
+  forall s, P s -> Q s.
+
+Definition Post_holds {W : Z} (P : @Post W) (s : State) : Prop := P s.
+
+Notation "P ⊆ Q" := (Post_implies P Q) (at level 80) : post_scope.
+Notation "s ∈ Q" := (Post_holds Q s) (at level 80) : post_scope.
+
+
+Bind Scope post_scope with Post.
+
+Local Open Scope bits_scope.
+Local Open Scope list_scope.
+Local Open Scope cmd_scope.
+Local Open Scope post_scope.
+Local Open Scope program_scope.
+
+Reserved Notation "c ∕ s ⇓ Q" (at level 70, no associativity).
+
+Inductive eval {W : Z} : @Cmd W -> Registers -> IOTrace -> LeakageTrace -> Post -> Prop :=
+| EvalSeq : forall c1 c2 r t k Q1 Q,
+    c1 ∕ (r, t, k) ⇓ Q1 ->
+    (forall r' t' k', Q1 (r', t', k') -> c2 ∕ (r', t', k') ⇓ Q) ->
+    c1 ; c2 ∕ (r, t, k) ⇓ Q
+| EvalValid : forall a b r t k Q r' io leak,
+    cycle r (Some (a, b)) = (r', io, leak) ->
+    Q (r', t ++ [io], k ++ [leak]) ->
+    valid a b ∕ (r, t, k) ⇓ Q
+| EvalSkip : forall r t k Q r' io leak,
+    cycle r None = (r', io, leak) ->
+    Q (r', t ++ [io], k ++ [leak]) ->
+    skip ∕ (r, t, k) ⇓ Q
+
+where "c ∕ s ⇓ Q" := (let '(r, t, k) := s in eval c r t k Q).
+
+Ltac solve_consequence_post :=
+  repeat (match goal with
+          | [ H : context[_ ?s] |- context[_ ?s] ] => eapply H
+          | [ H : context[?Q _ ] |- context[?Q _ ] ] => eapply H
+          | [ |- context[eval _ _ _ _] ] => econstructor
+          | [ |- context[cycle] ] => eassumption
+          | [ H : context[ _ -> eval ?c ?r ?t ?k] |- eval ?c ?r ?t ?k ] => apply H
+          end; simplify).
+
+Lemma consequence_post' {W : Z} : forall (c : @Cmd W) s Q,
+    (c ∕ s ⇓ Q) -> forall Q', Q ⊆ Q' -> (c ∕ s ⇓ Q').
+Proof.
+  intros c s Q Heval Q' Himplies.
+  unfold Post_implies in Himplies.
+  destruct s as [[r t] k].
+  induct Heval; solve_consequence_post.
+Qed.
+
+Theorem consequence_post {W : Z} : forall (c : @Cmd W) s Q Q',
+    (c ∕ s ⇓ Q) -> Q ⊆ Q' -> (c ∕ s ⇓ Q').
+Proof.
+  intros c s Q Q' Heval Himplies;
+    apply (consequence_post' c s Q Heval Q' Himplies).
+Qed.
+
+
+Section ct.
+  Inductive PubIOEvent : Set := | IOIn' | IOOut' | IONone'.
+
+  Fixpoint pub {W : Z} (l : @IOTrace W) : list PubIOEvent :=
+    match l with
+    | [] => []
+    | IOIn _ _ :: t => IOIn' :: pub t
+    | IOOut _ :: t => IOOut' :: pub t
+    | IONone :: t => IONone' :: pub t
+    end.
+
+  (* This is the main theorem we want to prove. *)
+  Theorem ct {W : Z} : exists (f : list PubIOEvent -> LeakageTrace),
+    forall (c : @Cmd W), c ∕ s0 ⇓ (fun '(_, t, k) => k = (f ∘ pub) t).
+  Admitted.
+End ct.
