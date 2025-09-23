@@ -1,3 +1,5 @@
--R ./vendor/coqutil coqutil
+-R . Research
 
-Multiplier.v
+Tactics.v
+Bits.v
+ToyMultiplier.v

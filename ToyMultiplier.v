@@ -1,8 +1,7 @@
 (****************************************************************************)
 (*  ToyMultiplier.v                                                         *)
 (*                                                                          *)
-(*  A small, bit-serial (shift-and-add) multiplier written over a simple    *)
-(*  bitvector library (`Zmod`).                                             *)
+(*  A small, bit-serial (shift-and-add) multiplier.                         *)
 (*                                                                          *)
 (*  High-level algorithm (classic shift-and-add):                           *)
 (*  - The 2W-bit register `P` holds both the partial sum (upper W+1 bits)   *)
@@ -17,37 +16,7 @@
 (*  `IOEvent` and a simple leak model via `LeakageEvent`.                   *)
 (****************************************************************************)
 
-From Stdlib Require Import Zmod.
-From Stdlib Require Import List. Import ListNotations.
-
-(**********************************************************************************)
-(* Bit-level notations, all living in scope `bits_scope`.                         *)
-(* - `x # n` constructs an n-bit value from integer x (mod 2^n).                  *)
-(* - `a =? b` is bitvector equality.                                              *)
-(* - `x #[ i ]` is the single-bit slice at index i.                               *)
-(* - `x .[ hi , lo ]` is the inclusive slice from lo to hi.                       *)
-(* - `a ++ b` concatenates `a` above `b` (note the argument order of `Zmod.app`). *)
-(* - `+`, `-`, `*` are bitvector arithmetic modulo the bitwidth.                  *)
-(**********************************************************************************)
-
-Declare Scope bits_scope.
-Delimit Scope bits_scope with bits.
-
-Notation "x # n" :=
-  (bits.of_Z n x)
-    (at level 0, format "x # n") : bits_scope.
-Notation "a =? b" :=
-  (@Zmod.eqb _ a b) (at level 70) : bits_scope.
-Notation "x #[ i ]" :=
-  (Zmod.slice i (i+1) x)
-    (at level 2, right associativity, format "x #[ i ]") : bits_scope.
-Notation "x .[ hi , lo ]" :=
-  (Zmod.slice lo (hi+1) x)
-    (format "x .[ hi , lo ]") : bits_scope.
-Notation "a ++ b" := (Zmod.app b a) (format "a ++ b") : bits_scope.
-Notation "a + b" := (Zmod.add a b) (format "a + b") : bits_scope.
-Notation "a - b" := (Zmod.sub a b) (format "a - b") : bits_scope.
-Notation "a * b" := (Zmod.mul a b) (format "a * b") : bits_scope.
+From Research Require Import Tactics Bits.
 
 Section WithWidth.
   Context {W : Z}.
@@ -68,12 +37,10 @@ Section WithWidth.
   (**************************************************************************)
 
   Record Registers : Set :=
-    mkRegisters
-    { B : bits W
-    ; A : bits WP
-    ; Cnt : bits WC
-    ; Busy : bits 1
-    }.
+    mkRegisters { B : bits W
+                ; A : bits WP
+                ; Cnt : bits WC
+                ; Busy : bits 1 }.
 
   (* Architectural reset state *)
   Definition R0 : Registers := mkRegisters 0#W 0#WP 0#WC 0#1.
@@ -116,10 +83,6 @@ Section WithWidth.
 
   Local Open Scope cmd_scope.
 
-  (* Zero-extension helper: turn a bitvector `b` into a larger bitvector of
-     width `z` by reinterpreting its unsigned value. *)
-  Definition zext {n} (z : Z) (b : bits n) := (Zmod.unsigned b)#z.
-
   (* Represents a postcondition in the omnisemantics sense. Since we only really
      care about calculating the leakage trace as some function of the IOTrace and
      values of initial state (which will usually appear in a quantifier). *)
@@ -131,8 +94,11 @@ Section WithWidth.
   Definition Post_implies (P Q : Post) : Prop :=
     forall r t k, P r t k -> Q r t k.
 
-  Notation "P ⊆ Q" := (Post_implies P Q)
-                          (at level 80) : post_scope.
+  Definition Post_holds (P : Post) (s : Registers * IOTrace * LeakageTrace) : Prop :=
+    let '(r, t, k) := s in P r t k.
+
+  Notation "P ⊆ Q" := (Post_implies P Q) (at level 80) : post_scope.
+  Notation "s ∈ Q" := (Post_holds Q s) (at level 80) : post_scope.
 
   Bind Scope post_scope with Post.
 
@@ -197,7 +163,7 @@ Section WithWidth.
   | EvalSeq : forall c1 c2 r t k Q1 Q,
       c1 ∕ (r, t, k) ⇓ Q1 ->
       (forall r' t' k', Q1 r' t' k' -> c2 ∕ (r', t', k') ⇓ Q) ->
-      c1;c2 ∕ (r, t, k) ⇓ Q
+      c1 ; c2 ∕ (r, t, k) ⇓ Q
   | EvalValid : forall a b r t k Q r' io leak,
       cycle r (Some (a, b)) = (r', io, leak) ->
       Q r' (t ++ [io]) (k ++ [leak]) ->
@@ -209,27 +175,28 @@ Section WithWidth.
 
   where "c ∕ s ⇓ Q" := (let '(r, t, k) := s in eval c r t k Q).
 
+  Ltac solve_consequence_post :=
+    repeat (match goal with
+            | [ H : context[_ ?r ?t ?k] |- context[_ ?r ?t ?k] ] => eapply H
+            | [ H : context[?Q _ _ _] |- context[?Q _ _ _] ] => eapply H
+            | [ |- context[eval _ _ _ _] ] => econstructor
+            | [ |- context[cycle] ] => eassumption
+            | [ H : context[ _ -> eval ?c ?r ?t ?k] |- eval ?c ?r ?t ?k ] => apply H
+            end; simplify).
+
+  Lemma consequence_post' : forall c s Q,
+      (c ∕ s ⇓ Q) -> forall Q', Q ⊆ Q' -> (c ∕ s ⇓ Q').
+  Proof using W.
+    intros c s Q Heval Q' Himplies.
+    unfold Post_implies in Himplies.
+    destruct s as [[r t] k].
+    induct Heval; solve_consequence_post.
+  Qed.
+
   Theorem consequence_post : forall c s Q Q',
       (c ∕ s ⇓ Q) -> Q ⊆ Q' -> (c ∕ s ⇓ Q').
-  Proof.
-    unfold Post_implies; intros; simpl.
-    destruct s as [[r t] k]; subst.
-    inversion H; subst;
-      try solve
-        [repeat (intros; simpl;
-                 match goal with
-                 | [ H : context[?Q _ _ _] |- context[?Q _ _ _] ] => apply H
-                 | [ |- context[eval _ _ _ _] ] => econstructor
-                 | [ |- context[cycle] ] => eassumption
-                 end)].
-
-
-
-
-  Example ex_eval1 : skip ∕ (R0,[],[]) ⇓ (fun _ _ _ => True).
   Proof using W.
-    econstructor.
-    econstructor.
-    exact I.
+    intros c s Q Q' Heval Himplies;
+    apply (consequence_post' c s Q Heval Q' Himplies).
   Qed.
 End WithWidth.
