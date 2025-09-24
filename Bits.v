@@ -13,9 +13,7 @@ From Stdlib Require Export Zmod.
 Declare Scope bits_scope.
 Delimit Scope bits_scope with bits.
 
-Notation "x # n" :=
-  (bits.of_Z n x)
-    (at level 0, format "x # n") : bits_scope.
+Notation "x # n" := (Zmod.of_Z (2 ^ n) x) (at level 0, format "x # n") : bits_scope.
 Notation "a =? b" :=
   (@Zmod.eqb _ a b) (at level 70) : bits_scope.
 Notation "x #[ i ]" :=
@@ -28,6 +26,16 @@ Notation "a ++ b" := (Zmod.app b a) (format "a ++ b") : bits_scope.
 Notation "a + b" := (Zmod.add a b) (format "a + b") : bits_scope.
 Notation "a - b" := (Zmod.sub a b) (format "a - b") : bits_scope.
 Notation "a * b" := (Zmod.mul a b) (format "a * b") : bits_scope.
+
+Notation "x ^ y" := (Zmod.pow x y) : bits_scope.
+Notation "x - y" := (Zmod.sub x y) : bits_scope.
+Notation "x + y" := (Zmod.add x y) : bits_scope.
+Notation "x * y" := (Zmod.mul x y) : bits_scope.
+Notation "1" := Zmod.one : bits_scope.
+Notation "0" := Zmod.zero : bits_scope.
+Notation "- x" := (Zmod.opp x) : bits_scope.
+
+Bind Scope bits_scope with Zmod.
 
 Local Open Scope bits_scope.
 

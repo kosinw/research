@@ -4,134 +4,98 @@
 (*  A small, bit-serial (shift-and-add) multiplier.                         *)
 (*                                                                          *)
 (*  High-level algorithm (classic shift-and-add):                           *)
-(*  - The 2W-bit register `P` holds both the partial sum (upper W+1 bits)   *)
-(*    and the shifting multiplier (lower W-1 bits).                         *)
-(*  - Each cycle, if the current least-significant bit of `P` is 1, we add  *)
-(*    the multiplicand `B` into the upper part of `P`.                      *)
-(*  - Then we effectively shift `P` right by one bit by re-assembling the   *)
-(*    upper (W+1)-bit segment with the (W-1)-bit tail of the lower segment. *)
-(*  - After W cycles, the full product is available in `P`.                 *)
+(*  - The 2W-bit architectural register `A` holds both the partial sum and  *)
+(*    the shifting multiplier. Conceptually:                                *)
 (*                                                                          *)
-(*  The state machine exposes a very small handshake-like interface via     *)
-(*  `IOEvent` and a simple leakage model via `LeakageEvent`.                *)
+(*        A = [ acc_hi : (W+1) bits ] ++ [ mult_lo : (W-1) bits ]           *)
+(*                                                                          *)
+(*    where `acc_hi` accumulates the running sum (with one extra carry bit) *)
+(*    and `mult_lo` stores the remaining multiplier bits.                   *)
+(*  - Each cycle, if the current least-significant bit of `A` is 1, we add  *)
+(*    the multiplicand `B` into `acc_hi`.                                   *)
+(*  - Then we effectively shift right by one by reassembling the new        *)
+(*    `(W+1)`-bit accumulator with the `(W-1)`-bit tail of the lower half.  *)
+(*  - After `W` cycles, the full product is available in `A`.               *)
 (****************************************************************************)
 
-From Stdlib Require Import Program.Basics.
+Set Implicit Arguments.
+
+From Stdlib Require Import Program List. Import ListNotations.
 From Research Require Import Tactics Bits.
 
-Section WithWidth.
-  Context {W : Z}.
-  Local Open Scope bits_scope.
+(**************************************************************************)
+(* Architectural state of the multiplier:                                 *)
+(* - `B`   : multiplicand (W bits), latched at start, constant during run *)
+(* - `A`   : product register (2W bits). Upper (W+1) bits hold the        *)
+(*            accumulating sum (room for carry); lower (W-1) bits hold    *)
+(*            the shifting multiplier.                                     *)
+(* - `Cnt` : countdown cycles remaining (enough bits to count up to W)    *)
+(* - `Busy`: 1 when an operation is in progress, 0 when idle              *)
+(**************************************************************************)
 
-  #[warnings="-notation-for-abbreviation"]
-    Local Notation WP := (Z.add W W) (only parsing).
+Local Open Scope bits_scope.
 
-  #[warnings="-notation-for-abbreviation"]
-    Local Notation WC := (Z.log2_up W) (only parsing).
+Abbreviation W := 32%Z.
+Abbreviation WP := 64%Z.
+Abbreviation WC := 5%Z.
 
-  (**************************************************************************)
-  (* Architectural state of the multiplier:                                 *)
-  (* - `B`   : multiplicand (W bits), latched at start, constant during run *)
-  (* - `A`   : partial product and shifting multiplier (2W bits)            *)
-  (* - `Cnt` : countdown cycles remaining (enough bits to count up to W)    *)
-  (* - `Busy`: 1 when an operation is in progress, 0 when idle              *)
-  (**************************************************************************)
+Record Registers : Set :=
+  mkRegisters { B : bits W
+              ; A : bits WP
+              ; Cnt : bits WC
+              ; Busy : bits 1 }.
 
-  Record Registers : Set :=
-    mkRegisters { B : bits W
-                ; A : bits WP
-                ; Cnt : bits WC
-                ; Busy : bits 1 }.
+(* Architectural reset state. All registers cleared; machine idle. *)
+Definition R0 : Registers := mkRegisters 0 0 0 0.
 
-  (* Architectural reset state *)
-  Definition R0 : Registers := mkRegisters 0#W 0#WP 0#WC 0#1.
+(***********************************************************************)
+(* Simple leakage model. We expose only timing-like events (no data):  *)
+(*   - `LeakValid` fires when inputs are accepted (machine goes busy). *)
+(*   - `LeakReady` fires when the result becomes available.            *)
+(*   - `LeakNone` indicates no leakage-relevant event this cycle.      *)
+(* Intended to support hyperproperty / constant-time proofs.           *)
+(***********************************************************************)
+Inductive LeakageEvent : Set :=
+| LeakValid
+| LeakReady
+| LeakNone.
 
-  (* Simple leakage model. Currently only `LeakValid` is used to model leakage for
-   hyperproperty proofs. *)
-  Inductive LeakageEvent : Set :=
-  | LeakValid
-  | LeakReady
-  | LeakNone.
 
-  Definition LeakageTrace := list LeakageEvent.
+Definition LeakageTrace := list LeakageEvent.
 
-  (* External IO events: input of two W-bit operands, and output of a 2W-bit product. *)
-  Inductive IOEvent : Set :=
-  | IOIn (a b : bits W)
-  | IOOut (p : bits WP)
-  | IONone.
+(*************************************************************************)
+(* External IO events (explicit handshake trace):                        *)
+(*   - `IOIn a b`  captures accepting a valid `(a,b)` input when idle.   *)
+(*   - `IOOut p`   captures producing the 2W-bit product `p` on finish.  *)
+(*   - `IONone`    captures a cycle with no externally visible IO event. *)
+(*************************************************************************)
+Inductive IOEvent : Set :=
+| IOIn (a b : bits W)
+| IOOut (p : bits WP)
+| IONone.
 
-  Definition IOTrace := list IOEvent.
 
-  Definition State := (Registers * IOTrace * LeakageTrace)%type.
+Definition IOTrace := list IOEvent.
 
-  Definition s0 : State := (R0, [], []).
+Record State :=
+  mkState { r : Registers
+          ; t : IOTrace
+          ; k : LeakageTrace }.
 
-  (* Tiny command DSL to script example scenarios. *)
-  Inductive Cmd : Set :=
-  | CmdValid (a b : bits W)
-  | CmdSkip
-  | CmdSeq (c1 c2 : Cmd).
+Definition s0 : State := {| r := R0; t := []; k := [] |}.
 
-  Definition skipn : positive -> Cmd :=
-    Pos.peano_rec (fun _ => Cmd) CmdSkip (fun _ recurse => CmdSeq CmdSkip recurse).
+Definition idle (r : Registers) : Prop := r.(Busy) = 0#1.
+Definition busy (r : Registers) : Prop := r.(Busy) = 1#1.
 
-  (********************************************************************************)
-  (*   Core datapath step for the bit-serial multiplier.                          *)
-  (*   Given multiplicand `b` and current `p`:                                    *)
-  (*   - `t0` is the upper half of `p` (bits [WP-1:W]) zero-extended to W+1 bits; *)
-  (*     this provides space for the carry of the addition.                       *)
-  (*   - `t1` is either `b` (zero-extended to W+1) when the lsb `p#[0]` is 1,     *)
-  (*     or zero otherwise. This encodes the conditional add.                     *)
-  (*   - We add `t0` and `t1` (W+1 bits), then append the lower half of `a`       *)
-  (*     shifted right by one (`p.[W-1,1]`), reconstructing a new 2W-bit `a`.     *)
-  (********************************************************************************)
-
-  Definition compute_a' (b : bits W) (a : bits WP) : bits WP :=
-    let t0 := zext (W+1) a.[WP-1,W] in
-    let t1 := if a#[0] =? 1#1 then zext (W+1) b else 0#(W+1) in
-    zext WP ((t0 + t1) ++ a.[W-1,1]).
-
-  (*********************************************************************)
-  (*   One machine cycle.                                              *)
-  (*   - When idle (`Busy = 0`):                                       *)
-  (*       * If input `(a,b)` is present, load `A <- a`, `B <- b`,     *)
-  (*         set `Cnt <- W-1`, and go busy. Emit IO and leak events.   *)
-  (*       * Else remain idle.                                         *)
-  (*   - When busy:                                                    *)
-  (*       * Update `A <- compute_a' B P`.                             *)
-  (*       * Decrement `Cnt`; when it reaches 0, finish the operation, *)
-  (*         drive `IOOut A` and deassert `Busy`.                      *)
-  (*********************************************************************)
-
-  Definition cycle (r : Registers) (i : option (bits W * bits W))
-    : Registers * IOEvent * LeakageEvent :=
-    if r.(Busy) =? 0#1
-    then (
-        match i with
-        | Some (a, b) =>
-            let p' := zext WP a in
-            let b' := b in
-            let cnt' := (W-1)#WC in
-            let busy' := 1#1 in
-            (mkRegisters b' p' cnt' busy', IOIn a b, LeakValid)
-        | None => (r, IONone, LeakNone)
-        end
-      )
-    else (
-        let p' := compute_a' r.(B) r.(A) in
-        let cnt' := if (r.(Cnt) =? 0#WC) then 0#WC else r.(Cnt) - 1#WC in
-        let busy' := if (r.(Cnt) =? 0#WC) then 0#1 else 1#1 in
-        let out' := if (r.(Cnt) =? 0#WC) then IOOut p' else IONone in
-        let leak' := if (r.(Cnt) =? 0#WC) then LeakReady else LeakNone in
-        (mkRegisters r.(B) p' cnt' busy', out', leak')
-      ).
-
-  Definition inactive (r : Registers) : Prop := r.(Busy) = 0#1.
-  Definition active (r : Registers) : Prop := r.(Busy) = 1#1.
-
-  Lemma active_inactive : forall r, active r \/ inactive r. Admitted.
-End WithWidth.
+(*************************************************************************)
+(* `CmdValid a b` presents `(a,b)` this cycle; if idle, they are latched *)
+(* and the machine becomes busy. `CmdSkip` advances one cycle without    *)
+(* inputs. `CmdSeq` sequences commands left-to-right.                    *)
+(*************************************************************************)
+Inductive Cmd : Set :=
+| CmdValid (a b : bits W)
+| CmdSkip
+| CmdSeq (c1 c2 : Cmd).
 
 Declare Scope cmd_scope.
 Delimit Scope cmd_scope with cmd.
@@ -144,90 +108,313 @@ Notation "'valid' a b" := (CmdValid a b)
 Notation "c1 ';' c2" := (CmdSeq c1 c2)
                           (at level 51, right associativity) : cmd_scope.
 
-Bind Scope cmd_scope with Cmd.
+Close Scope cmd_scope.
+
+(* Repeat `skip` n times (one cycle per `skip`). *)
+Definition skipn : positive -> Cmd :=
+  (Pos.peano_rec (fun _ => Cmd) skip (fun _ recurse => skip ; recurse))%cmd.
 
 (* Represents a postcondition in the omnisemantics sense. Since we only really
    care about calculating the leakage trace as some function of the IOTrace and
    values of initial state (which will usually appear in a quantifier). *)
-Definition Post {W : Z} := @State W -> Prop.
-
 Declare Scope post_scope.
 Delimit Scope post_scope with post.
 
-Definition Post_implies {W : Z} (P Q : @Post W) : Prop :=
-  forall s, P s -> Q s.
-
-Definition Post_holds {W : Z} (P : @Post W) (s : State) : Prop := P s.
+Definition Post : Type := State -> Prop.
+Definition Post_implies (P Q : Post) : Prop := forall s, P s -> Q s.
+Definition Post_holds (P : Post) (s : State) : Prop := P s.
 
 Notation "P ⊆ Q" := (Post_implies P Q) (at level 80) : post_scope.
 Notation "s ∈ Q" := (Post_holds Q s) (at level 80) : post_scope.
 
+Declare Custom Entry post_expr.
 
-Bind Scope post_scope with Post.
+(* Main postcondition notation - binds s to state *)
+Notation "{{ P }}" := (fun s : State => P s) (P custom post_expr at level 200) : post_scope.
 
-Local Open Scope bits_scope.
-Local Open Scope list_scope.
-Local Open Scope cmd_scope.
-Local Open Scope post_scope.
-Local Open Scope program_scope.
+(* Basic logical connectives in postconditions *)
+Notation "P /\ Q" :=
+  (fun s : State => P s /\ Q s) (in custom post_expr at level 80, right associativity) : post_scope.
+Notation "P \/ Q" :=
+  (fun s : State => P s \/ Q s) (in custom post_expr at level 85, right associativity) : post_scope.
+Notation "P -> Q" :=
+  (fun s : State => P s -> Q s) (in custom post_expr at level 90, right associativity) : post_scope.
+Notation "~ P" := (fun s : State => ~P) (in custom post_expr at level 75) : post_scope.
+Notation "P <-> Q" := (fun s : State => P s <-> Q s) (in custom post_expr at level 95) : post_scope.
+Notation "⊤" := (fun s : State => True) (in custom post_expr at level 10) : post_scope.
+Notation "⊥" := (fun s : State => False) (in custom post_expr at level 10) : post_scope.
+
+Notation "n" := (fun s : State => Zmod.of_Z _ n) (in custom post_expr at level 0, n bigint) : post_scope.
+
+(* Equality and comparison *)
+Notation "x = y" := (fun s : State => x s = y s) (in custom post_expr at level 70) : post_scope.
+Notation "x <> y" := (fun s : State => x s <> y s) (in custom post_expr at level 70) : post_scope.
+
+(* Predicates for register state *)
+Notation "'idle?'" := (fun s : State => idle s.(r)) (in custom post_expr at level 10) : post_scope.
+Notation "'busy?'" := (fun s : State => busy s.(r)) (in custom post_expr at level 10) : post_scope.
+
+(* Register field access *)
+Notation "'RB'" := (fun s : State => s.(r).(B)) (in custom post_expr at level 10) : post_scope.
+Notation "'RA'" := (fun s : State => s.(r).(A)) (in custom post_expr at level 10) : post_scope.
+Notation "'Rcnt'" := (fun s : State => s.(r).(Cnt)) (in custom post_expr at level 10) : post_scope.
+Notation "'Rbusy'" := (fun s : State => s.(r).(Busy)) (in custom post_expr at level 10) : post_scope.
+
+(* Parentheses *)
+Notation "( P )" := P (in custom post_expr, P at level 200) : post_scope.
+Notation "$ ( P )" := (fun s : State => P s) (in custom post_expr, P constr at level 200) : post_scope.
+
+Close Scope post_scope.
+
+(********************************************************************************)
+(*   Core datapath step for the bit-serial multiplier.                          *)
+(*   Given multiplicand `b` and current `a`:                                    *)
+(*   - `t0` is the upper half of `a` (bits [WP-1:W]) zero-extended to W+1 bits; *)
+(*     this provides space for the carry of the addition.                       *)
+(*   - `t1` is either `b` (zero-extended to W+1) when the lsb `a#[0]` is 1,     *)
+(*     or zero otherwise. This encodes the conditional add.                     *)
+(*   - We add `t0` and `t1` (W+1 bits), then append the lower half of `a`       *)
+(*     shifted right by one (`a.[W-1,1]`), reconstructing a new 2W-bit `A`.     *)
+(********************************************************************************)
+
+(* One shift-and-add micro-step: conditionally add `b` into the high half
+     of `a` then shift-right by one by reassembly. *)
+Definition compute_a' (b : bits W) (a : bits WP) : bits WP :=
+  let t0 := zext (W+1) a.[WP-1,W] in
+  let t1 := if a#[0] =? 1#1 then zext (W+1) b else 0#(W+1) in
+  ((t0 + t1) ++ a.[W-1,1]).
+
+(*********************************************************************)
+(*   - When idle (`Busy = 0`):                                       *)
+(*       * If input `(a,b)` is present, load `A <- a`, `B <- b`,     *)
+(*         set `Cnt <- W-1`, and go busy. Emit `IOIn` and `LeakValid`.*)
+(*       * Else remain idle.                                         *)
+(*   - When busy:                                                    *)
+(*       * Update `A <- compute_a' B A`.                             *)
+(*       * Decrement `Cnt`; when it reaches 0, finish the operation, *)
+(*         drive `IOOut A` and deassert `Busy` (emit `LeakReady`).   *)
+(*********************************************************************)
+
+Definition cycle (r : Registers) (i : option (bits W * bits W))
+  : Registers * IOEvent * LeakageEvent :=
+  if r.(Busy) =? 0#1
+  then (
+      match i with
+      | Some (a, b) =>
+          let a' := zext WP a in
+          let b' := b in
+          let cnt' := 31#WC in
+          let busy' := 1#1 in
+          (mkRegisters b' a' cnt' busy', IOIn a b, LeakValid)
+      | None => (r, IONone, LeakNone)
+      end
+    )
+  else (
+      let a' := compute_a' r.(B) r.(A) in
+      let cnt' := if (r.(Cnt) =? 0#WC) then 0#WC else r.(Cnt) - 1 in
+      let busy' := if (r.(Cnt) =? 0#WC) then 0#1 else 1#1 in
+      let out' := if (r.(Cnt) =? 0#WC) then IOOut a' else IONone in
+      let leak' := if (r.(Cnt) =? 0#WC) then LeakReady else LeakNone in
+      (mkRegisters r.(B) a' cnt' busy', out', leak')
+    ).
+
+Eval compute in {{ busy? \/ idle? }}%post.
+Eval compute in {{ busy? /\ RA = 32 }}%post.
+
+Declare Scope eval_scope.
+Delimit Scope eval_scope with eval.
 
 Reserved Notation "c ∕ s ⇓ Q" (at level 70, no associativity).
 
-Inductive eval {W : Z} : @Cmd W -> Registers -> IOTrace -> LeakageTrace -> Post -> Prop :=
+Inductive eval : Cmd -> State -> Post -> Prop :=
 | EvalSeq : forall c1 c2 r t k Q1 Q,
-    c1 ∕ (r, t, k) ⇓ Q1 ->
-    (forall r' t' k', Q1 (r', t', k') -> c2 ∕ (r', t', k') ⇓ Q) ->
-    c1 ; c2 ∕ (r, t, k) ⇓ Q
+    c1 ∕ (mkState r t k) ⇓ Q1 ->
+    (forall r' t' k', Q1 (mkState r' t' k') -> c2 ∕ (mkState r' t' k') ⇓ Q) ->
+    (c1 ; c2)%cmd ∕ (mkState r t k) ⇓ Q
 | EvalValid : forall a b r t k Q r' io leak,
     cycle r (Some (a, b)) = (r', io, leak) ->
-    Q (r', t ++ [io], k ++ [leak]) ->
-    valid a b ∕ (r, t, k) ⇓ Q
+    Q (mkState r' (t ++ [io])%list (k ++ [leak])%list) ->
+    (valid a b)%cmd ∕ (mkState r t k) ⇓ Q
 | EvalSkip : forall r t k Q r' io leak,
     cycle r None = (r', io, leak) ->
-    Q (r', t ++ [io], k ++ [leak]) ->
-    skip ∕ (r, t, k) ⇓ Q
+    Q (mkState r' (t ++ [io])%list (k ++ [leak]))%list ->
+    skip%cmd ∕ (mkState r t k) ⇓ Q
 
-where "c ∕ s ⇓ Q" := (let '(r, t, k) := s in eval c r t k Q).
+where "c ∕ s ⇓ Q" := (eval c s Q) : eval_scope.
 
-Ltac solve_consequence_post :=
-  repeat (match goal with
-          | [ H : context[_ ?s] |- context[_ ?s] ] => eapply H
-          | [ H : context[?Q _ ] |- context[?Q _ ] ] => eapply H
-          | [ |- context[eval _ _ _ _] ] => econstructor
-          | [ |- context[cycle] ] => eassumption
-          | [ H : context[ _ -> eval ?c ?r ?t ?k] |- eval ?c ?r ?t ?k ] => apply H
-          end; simplify).
+Section consequence_rule.
+  Local Open Scope eval_scope.
+  Local Open Scope post_scope.
 
-Lemma consequence_post' {W : Z} : forall (c : @Cmd W) s Q,
-    (c ∕ s ⇓ Q) -> forall Q', Q ⊆ Q' -> (c ∕ s ⇓ Q').
+  Ltac solve_post :=
+    repeat (match goal with
+            | [ H : context[_ ?s] |- context[_ ?s] ] => eapply H
+            | [ H : context[?Q _ ] |- context[?Q _ ] ] => eapply H
+            | [ |- context[eval _ _ _] ] => econstructor
+            | [ |- context[cycle] ] => eassumption
+            | [ H : context[ _ -> eval ?c ?s ?Q] |- eval ?c ?s ?Q ] => apply H
+            | [ |- _ = _ ] => equality
+            end; simplify).
+
+  Lemma consequence_post' : forall c s Q,
+      (c ∕ s ⇓ Q) -> forall Q', Q ⊆ Q' -> (c ∕ s ⇓ Q').
+  Proof.
+    intros c s Q Heval Q' Himplies.
+    unfold Post_implies in Himplies.
+    induct Heval; solve_post.
+  Qed.
+
+  Theorem consequence_post : forall c s Q Q',
+      (c ∕ s ⇓ Q) -> Q ⊆ Q' -> (c ∕ s ⇓ Q').
+  Proof.
+    intros c s Q Q' Heval Himplies.
+    apply (consequence_post' Heval Himplies).
+  Qed.
+End consequence_rule.
+
+Lemma busy_idle : forall r, busy r \/ idle r.
 Proof.
-  intros c s Q Heval Q' Himplies.
-  unfold Post_implies in Himplies.
-  destruct s as [[r t] k].
-  induct Heval; solve_consequence_post.
+  unfold busy, idle, Busy; intros r.
+  destruct r as [_ _ _ b].
+  pose proof (Zmod.unsigned_range b) as Hrange; simplify.
+  unfold Z.pow_pos in *; simplify.
+  destruct b as [z pf]; simplify.
+  assert (z = 0%Z \/ z = 1%Z) as Hrange' by linear_arithmetic.
+  clear Hrange.
+  destruct Hrange'; subst; rewrite pf.
+  - right. equality.
+  - left. equality.
 Qed.
 
-Theorem consequence_post {W : Z} : forall (c : @Cmd W) s Q Q',
-    (c ∕ s ⇓ Q) -> Q ⊆ Q' -> (c ∕ s ⇓ Q').
+Lemma cycle_idle_invalid : forall r,
+    idle r -> cycle r None = (r, IONone, LeakNone).
 Proof.
-  intros c s Q Q' Heval Himplies;
-    apply (consequence_post' c s Q Heval Q' Himplies).
+  unfold idle, cycle; simplify.
+  rewrite H; equality.
 Qed.
 
+Lemma cycle_idle_valid : forall a b r r',
+    idle r
+    -> r' = mkRegisters b (zext WP a) 31#WC 1#1
+    -> cycle r (Some (a, b)) = (r', IOIn a b, LeakValid).
+Proof.
+  unfold idle, cycle, busy; simplify.
+  rewrite H; simplify.
+  equality.
+Qed.
 
-Section ct.
-  Inductive PubIOEvent : Set := | IOIn' | IOOut' | IONone'.
+Lemma cycle_busy : forall i r r',
+    busy r
+    -> r.(Cnt) <> 0#WC
+    -> r' = mkRegisters r.(B) (compute_a' r.(B) r.(A)) (r.(Cnt)-1) 1#1
+    -> cycle r i = (r', IONone, LeakNone).
+Proof.
+  unfold busy, cycle; simplify.
+  rewrite H; simplify.
+  rewrite <- Zmod.eqb_eq in H0.
+  Search (_ <> true).
+  apply Bool.not_true_is_false in H0.
+  rewrite H0.
+  rewrite H1.
+  equality.
+Qed.
 
-  Fixpoint pub {W : Z} (l : @IOTrace W) : list PubIOEvent :=
-    match l with
-    | [] => []
-    | IOIn _ _ :: t => IOIn' :: pub t
-    | IOOut _ :: t => IOOut' :: pub t
-    | IONone :: t => IONone' :: pub t
+Lemma cycle_finish: forall i o r r',
+    busy r
+    -> o = compute_a' r.(B) r.(A)
+    -> r.(Cnt) = 0#WC
+    -> r' = mkRegisters r.(B) o 0#WC 0#1
+    -> cycle r i = (r', IOOut o, LeakReady).
+Proof.
+  unfold busy, cycle; simplify.
+  rewrite H; simplify.
+  rewrite <- Zmod.eqb_eq in H1.
+  rewrite H1.
+  rewrite H0.
+  equality.
+Qed.
+
+Section automation.
+  Local Open Scope post_scope.
+  Local Open Scope eval_scope.
+  Local Open Scope cmd_scope.
+  Local Open Scope bits_scope.
+
+  Print Visibility.
+
+  Ltac exsolve_step :=
+    match goal with
+    | [ H: context[_ /\ _] |- _ ] => destruct H
+    | [ |- context[_ /\ _] ] => split
+    | [ |- context[( valid _ _ ) ∕ _ ⇓ _] ] => eapply EvalValid
+    | [ |- context[skip ∕ _ ⇓ _] ] => eapply EvalSkip
+    | [ |- context[cycle _ (Some _)] ] => apply cycle_idle_valid
+    | [ _ : context[busy ?r] |- context[cycle ?r _] ]
+      => apply cycle_busy
+    | [ H1 : context[Cnt ?r = _] |- context[Cnt ?r <> _] ]
+      => rewrite H1
+    | [ |- context[idle _] ] => unfold idle; equality
+    | [ |- context[busy _] ] => unfold busy; equality
+    | [ |- context[?e = mkRegisters _ _ _ _] ] => equality
+    | [ |- context[Zmod.of_Z _ _ <> Zmod.of_Z _ _ ] ] =>
+        unfold not; intro; discriminate
+    | [ |- context[Zmod.of_Z _ _ =  Zmod.of_Z _ _ ] ] =>
+        equality
+    | [ |- context[Zmod.of_Z _ _ - 1 =  Zmod.of_Z _ _ ] ] =>
+        equality
+    | [ H : context[Cnt ?r = _ ] |- context[Cnt ?r - 1%bits = _ ] ] =>
+        rewrite H
     end.
 
-  (* This is the main theorem we want to prove. *)
-  Theorem ct {W : Z} : exists (f : list PubIOEvent -> LeakageTrace),
-    forall (c : @Cmd W), c ∕ s0 ⇓ (fun '(_, t, k) => k = (f ∘ pub) t).
+  Ltac exsolve' := repeat (simplify; exsolve_step).
+
+  Ltac exsolve Q := apply EvalSeq with ( Q1 := Q ); exsolve'.
+
+  (* TODO knwabueze: Change this theorem statement. *)
+  Theorem terminates_idle : forall a b, (valid a b; skipn 32) ∕ s0 ⇓ {{ idle? }}.
+  Proof.
+    intros a b.
+    exsolve {{ busy? /\ Rcnt = 31 }}.
+    exsolve {{ busy? /\ Rcnt = 30 }}.
+    exsolve {{ busy? /\ Rcnt = 29 }}.
+    exsolve {{ busy? /\ Rcnt = 28 }}.
+    exsolve {{ busy? /\ Rcnt = 27 }}.
+    exsolve {{ busy? /\ Rcnt = 26 }}.
+    exsolve {{ busy? /\ Rcnt = 25 }}.
+    exsolve {{ busy? /\ Rcnt = 24 }}.
+    exsolve {{ busy? /\ Rcnt = 23 }}.
+    exsolve {{ busy? /\ Rcnt = 22 }}.
+    exsolve {{ busy? /\ Rcnt = 21 }}.
+    exsolve {{ busy? /\ Rcnt = 20 }}.
+    exsolve {{ busy? /\ Rcnt = 19 }}.
+    exsolve {{ busy? /\ Rcnt = 18 }}.
+    exsolve {{ busy? /\ Rcnt = 17 }}.
+    exsolve {{ busy? /\ Rcnt = 16 }}.
+    exsolve {{ busy? /\ Rcnt = 15 }}.
+    admit.
+  Qed.
+End automation.
+
+Section ct.
+  Local Open Scope post_scope.
+  Local Open Scope eval_scope.
+  Local Open Scope cmd_scope.
+  Local Open Scope bits_scope.
+
+  Inductive PubIOEvent : Set := | IOIn' | IOOut' | IONone'.
+
+  Definition pub (i : IOEvent) : PubIOEvent :=
+    match i with
+    | IOIn _ _ => IOIn'
+    | IOOut _ => IOOut'
+    | IONone => IONone'
+    end.
+
+  Let g (l : list IOEvent) : list PubIOEvent := map pub l.
+
+  (* Main constant-time style theorem: the leakage trace is a function of   *)
+  (* only the public IO schedule (valid/ready structure), not secret data.  *)
+  Theorem ct : exists (f : list PubIOEvent -> list LeakageEvent), forall c,
+    c ∕ s0 ⇓ (fun s => s.(k) = (f ∘ g) s.(t)).
   Admitted.
 End ct.
