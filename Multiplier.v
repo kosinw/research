@@ -1,5 +1,5 @@
 (****************************************************************************)
-(*  ToyMultiplier.v                                                         *)
+(*  Multiplier.v                                                            *)
 (*                                                                          *)
 (*  A small, bit-serial (shift-and-add) multiplier.                         *)
 (*                                                                          *)
@@ -150,6 +150,11 @@ Notation "n" := (fun s : State => Zmod.of_Z _ n) (in custom post_expr at level 0
 Notation "x = y" := (fun s : State => x s = y s) (in custom post_expr at level 70) : post_scope.
 Notation "x <> y" := (fun s : State => x s <> y s) (in custom post_expr at level 70) : post_scope.
 
+(* Arithmetic *)
+Notation "x + y" := (fun s : State => x s + y s) (in custom post_expr at level 50) : post_scope.
+Notation "x - y" := (fun s : State => x s - y s) (in custom post_expr at level 50) : post_scope.
+Notation "x * y" := (fun s : State => x s * y s) (in custom post_expr at level 40) : post_scope.
+
 (* Predicates for register state *)
 Notation "'idle?'" := (fun s : State => idle s.(r)) (in custom post_expr at level 10) : post_scope.
 Notation "'busy?'" := (fun s : State => busy s.(r)) (in custom post_expr at level 10) : post_scope.
@@ -160,9 +165,10 @@ Notation "'RA'" := (fun s : State => s.(r).(A)) (in custom post_expr at level 10
 Notation "'Rcnt'" := (fun s : State => s.(r).(Cnt)) (in custom post_expr at level 10) : post_scope.
 Notation "'Rbusy'" := (fun s : State => s.(r).(Busy)) (in custom post_expr at level 10) : post_scope.
 
-(* Parentheses *)
+(* Embedded Rocq terms *)
 Notation "( P )" := P (in custom post_expr, P at level 200) : post_scope.
-Notation "$ ( P )" := (fun s : State => P s) (in custom post_expr, P constr at level 200) : post_scope.
+Notation "'constr:' ( P )" := (fun s : State => P s) (in custom post_expr, P constr at level 200) : post_scope.
+Notation "$ p" := (fun s : State => p) (in custom post_expr at level 0, p constr at level 200) : post_scope.
 
 Close Scope post_scope.
 
@@ -340,22 +346,21 @@ Section automation.
   Local Open Scope cmd_scope.
   Local Open Scope bits_scope.
 
-  Print Visibility.
-
   Ltac exsolve_step :=
     match goal with
     | [ H: context[_ /\ _] |- _ ] => destruct H
     | [ |- context[_ /\ _] ] => split
     | [ |- context[( valid _ _ ) ∕ _ ⇓ _] ] => eapply EvalValid
     | [ |- context[skip ∕ _ ⇓ _] ] => eapply EvalSkip
-    | [ |- context[cycle _ (Some _)] ] => apply cycle_idle_valid
+    | [ _ : context[Cnt ?r = Zmod.of_Z WC 0] |- context[cycle ?r _] ]
+      => apply cycle_finish
     | [ _ : context[busy ?r] |- context[cycle ?r _] ]
       => apply cycle_busy
-    | [ H1 : context[Cnt ?r = _] |- context[Cnt ?r <> _] ]
-      => rewrite H1
+    | [ |- context[cycle _ (Some _)] ] => apply cycle_idle_valid
     | [ |- context[idle _] ] => unfold idle; equality
     | [ |- context[busy _] ] => unfold busy; equality
     | [ |- context[?e = mkRegisters _ _ _ _] ] => equality
+    | [ |- context [Cnt _ <> _ ]] => unfold not; intro
     | [ |- context[Zmod.of_Z _ _ <> Zmod.of_Z _ _ ] ] =>
         unfold not; intro; discriminate
     | [ |- context[Zmod.of_Z _ _ =  Zmod.of_Z _ _ ] ] =>
@@ -364,13 +369,14 @@ Section automation.
         equality
     | [ H : context[Cnt ?r = _ ] |- context[Cnt ?r - 1%bits = _ ] ] =>
         rewrite H
+    | [ |- context [Cnt _ = _ ]] => simplify; trivial
+    | [ H1 : context[Cnt ?r = _], H2 : context[Cnt ?r = _] |- _ ]
+      => rewrite H1 in H2; discriminate
     end.
 
-  Ltac exsolve' := repeat (simplify; exsolve_step).
+  Ltac exsolve' := simpl; repeat exsolve_step.
 
   Ltac exsolve Q := apply EvalSeq with ( Q1 := Q ); exsolve'.
-
-  (* TODO knwabueze: Change this theorem statement. *)
   Theorem terminates_idle : forall a b, (valid a b; skipn 32) ∕ s0 ⇓ {{ idle? }}.
   Proof.
     intros a b.
@@ -391,8 +397,22 @@ Section automation.
     exsolve {{ busy? /\ Rcnt = 17 }}.
     exsolve {{ busy? /\ Rcnt = 16 }}.
     exsolve {{ busy? /\ Rcnt = 15 }}.
-    admit.
-  Qed.
+    exsolve {{ busy? /\ Rcnt = 14 }}.
+    exsolve {{ busy? /\ Rcnt = 13 }}.
+    exsolve {{ busy? /\ Rcnt = 12 }}.
+    exsolve {{ busy? /\ Rcnt = 11 }}.
+    exsolve {{ busy? /\ Rcnt = 10 }}.
+    exsolve {{ busy? /\ Rcnt = 9 }}.
+    exsolve {{ busy? /\ Rcnt = 8 }}.
+    exsolve {{ busy? /\ Rcnt = 7 }}.
+    exsolve {{ busy? /\ Rcnt = 6 }}.
+    exsolve {{ busy? /\ Rcnt = 5 }}.
+    exsolve {{ busy? /\ Rcnt = 4 }}.
+    exsolve {{ busy? /\ Rcnt = 3 }}.
+    exsolve {{ busy? /\ Rcnt = 2 }}.
+    exsolve {{ busy? /\ Rcnt = 1 }}.
+    exsolve {{ busy? /\ Rcnt = 0 }}.
+  Admitted.
 End automation.
 
 Section ct.
