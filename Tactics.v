@@ -93,8 +93,9 @@ Ltac instantiate_obvious1 H :=
       | _ =>
           let x' := fresh x in
           evar (x' : T);
-          let x'' := eval unfold x' in x' in specialize (H x''); clear x';
-                                       instantiate_obvious1 H
+          let x'' := eval unfold x' in
+          x' in specialize (H x''); clear x';
+          instantiate_obvious1 H
       end
   end.
 
@@ -125,11 +126,12 @@ Ltac invertN n :=
   | [ |- forall x : ?E, _ ] =>
       match type of E with
       | Prop =>
-          let H := fresh in intro H;
-                            match n with
-                            | 1 => invert' H
-                            | S ?n' => invertN n'
-                            end
+          let H := fresh in
+          intro H;
+          match n with
+          | 1 => invert' H
+          | S ?n' => invertN n'
+          end
       | _ => intro; invertN n
       end
   end.
@@ -154,17 +156,21 @@ Ltac propositional := intuition idtac.
 Ltac linear_arithmetic :=
   intros; repeat match goal with
             | [ |- context[max ?a ?b] ] =>
-                let Heq := fresh "Heq" in destruct (Nat.max_spec a b) as [[? Heq] | [? Heq]];
-                                          rewrite Heq in *; clear Heq
+                let Heq := fresh "Heq" in
+                destruct (Nat.max_spec a b) as [[? Heq] | [? Heq]];
+                rewrite Heq in *; clear Heq
             | [ _ : context[max ?a ?b] |- _ ] =>
-                let Heq := fresh "Heq" in destruct (Nat.max_spec a b) as [[? Heq] | [? Heq]];
-                                          rewrite Heq in *; clear Heq
+                let Heq := fresh "Heq" in
+                destruct (Nat.max_spec a b) as [[? Heq] | [? Heq]];
+                rewrite Heq in *; clear Heq
             | [ |- context[min ?a ?b] ] =>
-                let Heq := fresh "Heq" in destruct (Nat.min_spec a b) as [[? Heq] | [? Heq]];
-                                          rewrite Heq in *; clear Heq
+                let Heq := fresh "Heq" in
+                destruct (Nat.min_spec a b) as [[? Heq] | [? Heq]];
+                rewrite Heq in *; clear Heq
             | [ _ : context[min ?a ?b] |- _ ] =>
-                let Heq := fresh "Heq" in destruct (Nat.min_spec a b) as [[? Heq] | [? Heq]];
-                                          rewrite Heq in *; clear Heq
+                let Heq := fresh "Heq" in
+                destruct (Nat.min_spec a b) as [[? Heq] | [? Heq]];
+                rewrite Heq in *; clear Heq
             end; lia.
 
 Ltac equality := intuition congruence.
