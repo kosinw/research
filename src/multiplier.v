@@ -46,8 +46,6 @@ Section Common.
       ; RBusy : bv 1
       }.
 
-  Hint Constructors Registers : multiplier.
-
   Definition Registers0 := mkRegisters 0 0 0 0.
 
   Record In :=
@@ -57,8 +55,6 @@ Section Common.
       ; InValid : bv 1
       }.
 
-  Hint Constructors In : multiplier.
-
   Definition In0 := mkIn 0 0 0.
 
   Record Out :=
@@ -66,12 +62,10 @@ Section Common.
       { OutP : bv 8
       ; OutReady : bv 1 }.
 
-  Hint Constructors Out : multiplier.
-
   Definition Out0 := mkOut 0 0.
 End Common.
 
-Module Basic.
+Module Circuit1.
   Local Open Scope bv_scope.
 
   Record ILeakage :=
@@ -80,15 +74,11 @@ Module Basic.
       ; LeakReady : bv 1
       }.
 
-  Hint Constructors ILeakage : multiplier.
-
   Record State :=
     mkState
       { R : Registers
       ; T : list ILeakage
       }.
-
-  Hint Constructors State : multiplier.
 
   Definition State0 := mkState Registers0 [].
 
@@ -99,21 +89,21 @@ Module Basic.
     let t1 := if bv_odd a then 5#b else 0 in
     bv_concat 8 (t0 + t1) (bv_extract 1 3 a).
 
-  Definition cycle (s : State) (inp : In) : State * Out :=
+  Definition cycle (s : State) (x : In) : State * Out :=
     if s.(R).(RBusy) =? 0
     then
-      if inp.(InValid) =? 1
+      if x.(InValid) =? 1
       then
-        let ra' := 8#inp.(InA) in
-        let rb' := inp.(InB) in
+        let ra' := 8#x.(InA) in
+        let rb' := x.(InB) in
         let rcount' := 3 in
         let rbusy' := 1 in
         let r' := mkRegisters ra' rb' rcount' rbusy' in
-        let t' := s.(T) ++ [mkILeak inp.(InValid) 0 ] in
+        let t' := s.(T) ++ [mkILeak x.(InValid) 0 ] in
         let s' := mkState r' t' in
         (s', Out0)
       else
-        let t' := s.(T) ++ [mkILeak inp.(InValid) 0 ] in
+        let t' := s.(T) ++ [mkILeak x.(InValid) 0 ] in
         let r' := s.(R) in
         let s' := mkState r' t' in
         (s', Out0)
@@ -125,7 +115,7 @@ Module Basic.
         let rcount' := 0 in
         let rbusy' := 0 in
         let r' := mkRegisters ra' rb' rcount' rbusy' in
-        let t' := s.(T) ++ [mkILeak inp.(InValid) 1 ] in
+        let t' := s.(T) ++ [mkILeak x.(InValid) 1 ] in
         let s' := mkState r' t' in
         let o' := mkOut ra' 1 in
         (s', o')
@@ -133,17 +123,17 @@ Module Basic.
         let rcount' := s.(R).(RCount) - 1 in
         let rbusy' := 1 in
         let r' := mkRegisters ra' rb' rcount' rbusy' in
-        let t' := s.(T) ++ [mkILeak inp.(InValid) 0 ] in
+        let t' := s.(T) ++ [mkILeak x.(InValid) 0 ] in
         let s' := mkState r' t' in
         (s', Out0).
 
-  Fixpoint cycles (s : State) (ins : list In) : State * list Out :=
-    match ins with
+  Fixpoint cycles (s : State) (xs : list In) : State * list Out :=
+    match xs with
     | [] => (s, [])
-    | i :: ins' =>
-        let (s', out) := cycle s i in
-        let (s'', outs) := cycles s' ins' in
-        (s'', out :: outs)
+    | x :: xs' =>
+        let (s', y) := cycle s x in
+        let (s'', ys) := cycles s' xs' in
+        (s'', y :: ys)
     end.
 
   Fixpoint repeat {A : Type} (f : A -> A) (n : nat) {struct n} : (A -> A) :=
@@ -237,19 +227,15 @@ Module Basic.
     unfold bv_modulus in *; simpl in *. nia.
   Qed.
 
-  Hint Resolve shift_and_add4_correct : multiplier.
-
   Lemma bv1_is_0_or_1 : forall (b : bv 1), b = 0 \/ b = 1.
   Proof.
     intro b. Search "bv" "ind".
     apply bv_1_ind with (P := (fun b => b = 0 \/ b = 1)); intuition congruence.
   Qed.
 
-  Hint Resolve bv1_is_0_or_1 : multiplier.
-
   Definition busy (s : State) := s.(R).(RBusy) = 1.
   Definition finished (s : State) := s.(R).(RCount) = 0.
-  Definition valid (i : In) := i.(InValid) = 1.
+  Definition valid (x : In) := x.(InValid) = 1.
 
   Hint Extern 1 (_ = _ :> bv 1) =>
          match goal with
@@ -257,50 +243,46 @@ Module Basic.
          | |- ?b = 1 :> bv 1 => pose proof (bv1_is_0_or_1 b); intuition
          end : multiplier.
 
-  Definition cycle_idle_valid s1 i s2 o : Prop := forall a b,
-      ~ busy s1 -> valid i -> a = i.(InA) -> b = i.(InB) -> (s2, o) = cycle s1 i ->
-      s2 = s1 <| R := {| RA := 8#a; RB := b; RCount := 3; RBusy := 1 |} |>
-              <| T := s1.(T) ++ [{| LeakValid := 1; LeakReady := 0 |}] |>
-      /\ o = Out0.
+  Definition cycle_idle_valid s1 x s2 y : Prop :=
+      ~ busy s1 -> valid x -> (s2, y) = cycle s1 x ->
+      (s2, y) = (s1 <| R := {| RA := 8#x.(InA); RB := x.(InB); RCount := 3; RBusy := 1 |} |>
+                    <| T := s1.(T) ++ [{| LeakValid := 1; LeakReady := 0 |}] |>,
+                 Out0).
 
-  Lemma cycle_idle_valid_holds : forall s1 i s2 o, cycle_idle_valid s1 i s2 o.
+  Lemma cycle_idle_valid_holds : forall s1 x s2 y, cycle_idle_valid s1 x s2 y.
   Proof.
     unfold cycle_idle_valid.
     repeat progress (intros; simpl; subst).
     unfold cycle in *. unfold bv_eqb in *. unfold busy in *.
     unfold valid in *. assert (s1.(R).(RBusy) = 0) by auto with multiplier.
-    repeat rewrite H1 in H3. simpl in *. rewrite H0 in H3.
-    simpl in *. inversion H3; clear H3. subst. done.
+    repeat rewrite H2 in H1. simpl in *. rewrite H0 in H1.
+    csimpl in *. inv H1. done.
   Qed.
 
-  Hint Resolve cycle_idle_valid_holds : multiplier.
+  Definition cycle_idle_invalid s1 x s2 y : Prop :=
+    ~ busy s1 -> ~ valid x -> (s2, y) = cycle s1 x ->
+    (s2, y) = (s1 <| T := s1.(T) ++ [{| LeakValid := 0; LeakReady := 0 |}] |>,
+               Out0).
 
-  Definition cycle_idle_invalid s1 i s2 o : Prop :=
-    ~ busy s1 -> ~ valid i -> (s2, o) = cycle s1 i ->
-    s2 = s1 <| T := s1.(T) ++  [{| LeakValid := 0; LeakReady := 0 |}] |>
-    /\ o = Out0.
-
-  Lemma cycle_idle_invalid_holds : forall s1 i s2 o, cycle_idle_invalid s1 i s2 o.
+  Lemma cycle_idle_invalid_holds : forall s1 x s2 y, cycle_idle_invalid s1 x s2 y.
   Proof.
     unfold cycle_idle_invalid.
     repeat progress (intros; simpl; subst).
     unfold cycle, bv_eqb, busy, valid in *.
     assert (s1.(R).(RBusy) = 0) by auto with multiplier.
-    assert (i.(InValid) = 0) by auto with multiplier.
+    assert (x.(InValid) = 0) by auto with multiplier.
     rewrite H2, H3 in H1. simpl in *. inversion H1; clear H1.
     done.
   Qed.
 
-  Hint Resolve cycle_idle_invalid_holds : multiplier.
+  Definition cycle_busy_unfinished s1 x s2 y : Prop :=
+    busy s1 -> ~ finished s1 -> (s2, y) = cycle s1 x ->
+      (s2, y) = (s1 <| R; RA := shift_and_add s1.(R).(RB) s1.(R).(RA) |>
+                    <| R; RCount := s1.(R).(RCount) - 1 |>
+                   <| T := s1.(T) ++ [{| LeakValid := x.(InValid); LeakReady := 0 |}] |>,
+                 Out0).
 
-  Definition cycle_busy_unfinished s1 i s2 o : Prop :=
-    busy s1 -> ~ finished s1 -> (s2, o) = cycle s1 i ->
-      s2 = s1 <| R; RA := shift_and_add s1.(R).(RB) s1.(R).(RA) |>
-              <| R; RCount := s1.(R).(RCount) - 1 |>
-              <| T := s1.(T) ++ [{| LeakValid := i.(InValid); LeakReady := 0 |}] |>
-      /\ o = Out0.
-
-  Lemma cycle_busy_unfinished_holds : forall s1 i s2 o, cycle_busy_unfinished s1 i s2 o.
+  Lemma cycle_busy_unfinished_holds : forall s1 x s2 y, cycle_busy_unfinished s1 x s2 y.
   Proof.
     unfold cycle_busy_unfinished.
     repeat progress (intros; simpl; subst).
@@ -311,17 +293,15 @@ Module Basic.
     - inversion H1; clear H1; subst. intuition congruence.
   Qed.
 
-  Hint Resolve cycle_busy_unfinished_holds : multiplier.
+  Definition cycle_busy_finished s1 x s2 y : Prop :=
+    busy s1 -> finished s1 -> (s2, y) = cycle s1 x ->
+      (s2, y) = (s1 <| R; RA := shift_and_add s1.(R).(RB) s1.(R).(RA) |>
+                    <| R; RCount := 0 |>
+                    <| R; RBusy := 0 |>
+                    <| T := s1.(T) ++ [{| LeakValid := x.(InValid); LeakReady := 1 |}] |>,
+                 {| OutP := s2.(R).(RA); OutReady := 1 |}).
 
-  Definition cycle_busy_finished s1 i s2 o : Prop :=
-    busy s1 -> finished s1 -> (s2, o) = cycle s1 i ->
-      s2 = s1 <| R; RA := shift_and_add s1.(R).(RB) s1.(R).(RA) |>
-              <| R; RCount := 0 |>
-              <| R; RBusy := 0 |>
-              <| T := s1.(T) ++ [{| LeakValid := i.(InValid); LeakReady := 1 |}] |>
-      /\ o = {| OutP := s2.(R).(RA); OutReady := 1 |}.
-
-  Lemma cycle_busy_finished_holds : forall s1 i s2 o, cycle_busy_finished s1 i s2 o.
+  Lemma cycle_busy_finished_holds : forall s1 x s2 y, cycle_busy_finished s1 x s2 y.
   Proof.
     unfold cycle_busy_finished.
     repeat progress (intros; simpl; subst).
@@ -330,77 +310,52 @@ Module Basic.
     simpl in *. inversion H1; clear H1; subst. done.
   Qed.
 
-  Hint Resolve cycle_busy_finished_holds : multiplier.
+  Ltac simplify :=
+    repeat progress (intros; csimpl in *; subst).
 
-  Inductive cycle_spec : State -> In -> State -> Out -> Prop :=
-    | CycleIdleValid : forall s1 i s2 o,
-        cycle_idle_valid s1 i s2 o -> cycle_spec s1 i s2 o
-    | CycleIdleInvalid : forall s1 i s2 o,
-        cycle_idle_invalid s1 i s2 o -> cycle_spec s1 i s2 o
-    | CycleBusyUnfinished : forall s1 i s2 o,
-        cycle_busy_unfinished s1 i s2 o -> cycle_spec s1 i s2 o
-    | CycleBusyFinished : forall s1 i s2 o,
-        cycle_busy_finished s1 i s2 o -> cycle_spec s1 i s2 o.
+  Ltac unfold_cycle_predicates :=
+    unfold cycle_idle_valid, cycle_idle_invalid, cycle_busy_unfinished,
+      cycle_busy_finished, busy, finished, valid in *.
 
-  Hint Constructors cycle_spec : multiplier.
+  Ltac unfold_pair H := inversion H; clear H.
 
-  (* We state the theorem that we can use the inductive proposition given
-     that we have the Gallina function. *)
-  Theorem cycle_complete : forall s1 i s2 o,
-      (s2, o) = cycle s1 i -> cycle_spec s1 i s2 o.
-  Proof.
-    intros s1 i s2 o Hcycle. unfold cycle in *.
-    destruct (s1.(R).(RBusy) =? 0) as [|].
-    - destruct (i.(InValid) =? 1) as [|].
-      + inversion Hcycle; clear Hcycle; subst.
-        constructor; apply cycle_idle_valid_holds.
-      + inversion Hcycle; clear Hcycle; subst.
-        constructor; apply cycle_idle_invalid_holds.
-    - destruct (s1.(R).(RCount) =? 0) as [|].
-      + inversion Hcycle; clear Hcycle; subst.
-        constructor; apply cycle_busy_unfinished_holds.
-      + inversion Hcycle; clear Hcycle; subst.
-        constructor; apply cycle_busy_finished_holds.
-  Qed.
+  Ltac unfold_pairs :=
+    repeat match goal with
+      | H : (_, _) = (_, _) |- _ => unfold_pair H
+      end.
 
-  Inductive cycles_spec : State -> list In -> State -> list Out -> Prop :=
-    | CyclesRefl : forall s, cycles_spec s [] s []
-    | CyclesTrans : forall s i s' (o : Out) is s'' o os,
-        cycle_spec s i s' o ->
-        cycles_spec s' is s'' os ->
-        cycles_spec s (i :: is) s'' (o :: os).
+  Ltac unroll_let e :=
+    let Hlet := fresh "Hlet0" in destruct e eqn:Hlet; symmetry in Hlet.
 
-  Hint Constructors cycles_spec : multiplier.
+  Ltac unroll_lets :=
+    repeat match goal with
+      | [ H : context[let (_, _) := (cycle ?x ?y) in _] |- _ ] =>
+          unroll_let (cycle x y)
+      end.
 
-  Lemma cycles_complete' : forall is s1 s2 os,
-      (s2, os) = cycles s1 is -> cycles_spec s1 is s2 os.
-  Proof.
-    intro is. induction is; intros.
-    - simpl in *. inversion H. constructor.
-    - simpl in *. case_match. case_match. inversion H. subst.
-      clear H. apply CyclesTrans with (s' := s).
-      + done.
-      + apply cycle_complete. symmetry. assumption.
-      + apply IHis. symmetry. assumption.
-  Qed.
-
-  Theorem cycles_complete : forall s1 is s2 os,
-      (s2, os) = cycles s1 is -> cycles_spec s1 is s2 os.
-  Proof.
-    intros s1 is s2 os. exact (cycles_complete' is s1 s2 os).
-  Qed.
+  Ltac cauto :=
+    unfold_pairs; subst;
+    try (unfold_cycle_predicates;
+         solve [ naive_solver | csimpl in *; bv_solve ]).
 
   (* Finally, with all those helper theorems out of the way, we can now prove
      the following correctness property:
 
      For any cycle where the circuit is idle, if a valid [a] and [b] are
      provided, four cycles later it will produce [a *| b]. *)
-  Theorem cycles_correct : forall s1 s2 i1 i2 i3 i4 os a b,
-      ~ busy s1 -> i1 = {| InA := a; InB := b; InValid := 1 |} ->
-      (s2, os) = cycles s1 [i1; i2; i3; i4] ->
-      os = [Out0; Out0; Out0; {| OutP := a *| b; OutReady := 1 |}].
-  Admitted.
-
+  Theorem cycles_correct : forall s s' x1 x2 x3 x4 x5 ys a b,
+      ~ busy s -> x1 = {| InA := a; InB := b; InValid := 1 |} ->
+      (s', ys) = cycles s [x1; x2; x3; x4; x5] ->
+      ys = [Out0; Out0; Out0; Out0; {| OutP := a *| b; OutReady := 1 |}].
+  Proof.
+    simplify. unroll_lets.
+    apply cycle_idle_valid_holds in Hlet0; cauto.
+    apply cycle_busy_unfinished_holds in Hlet1; cauto.
+    apply cycle_busy_unfinished_holds in Hlet2; cauto.
+    apply cycle_busy_unfinished_holds in Hlet3; cauto.
+    apply cycle_busy_finished_holds in Hlet4; cauto.
+    simplify. repeat f_equal. by apply shift_and_add4_correct.
+  Qed.
 
   (** NOTE knwabueze for aerbsen: I think we talked about using this definition
       for the extraction from the list of inputs to the specification leakage.
@@ -419,10 +374,10 @@ Module Basic.
   Definition SLeakage := option (bv 4).
 
   Definition extract : list In -> list SLeakage :=
-    map (fun i => if i.(InValid) =? 1 then Some i.(InA) else None).
+    map (fun x => if x.(InValid) =? 1 then Some x.(InA) else None).
 
-  Theorem cycle_ct : exists (predictor : list SLeakage -> list ILeakage),
-    forall (s' : State) (is : list In) (os : list Out),
-      (s', os) = cycles State0 is -> s'.(T) = (predictor ∘ extract) is.
+  Theorem cycles_ct : exists (predictor : list SLeakage -> list ILeakage),
+    forall (xs : list In) (ys : list Out) (s : State),
+      (s, ys) = cycles State0 xs -> s.(T) = (predictor ∘ extract) xs.
   Admitted.
-End Basic.
+End Circuit1.

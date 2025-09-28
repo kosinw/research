@@ -2,7 +2,8 @@ From stdpp Require Export base numbers bitvector.
 
 Local Open Scope bv_scope.
 
-#[export] Ltac Zify.zify_convert_to_euclidean_division_equations_flag ::= constr:(true).
+#[export]
+  Ltac Zify.zify_convert_to_euclidean_division_equations_flag ::= constr:(true).
 
 Section WithContext.
   Context {n : N}.
@@ -15,6 +16,6 @@ Section WithContext.
 End WithContext.
 
 
-Infix "=?" := bv_eqb (only parsing) : bv_scope.
-Infix "#" := bv_zero_extend (at level 65, only parsing) : bv_scope.
-Infix "||" := (bv_concat _) (only parsing) : bv_scope.
+Infix "=?" := bv_eqb : bv_scope.
+Infix "#" := bv_zero_extend (at level 65) : bv_scope.
+Infix "||" := (bv_concat _) : bv_scope.
