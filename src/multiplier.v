@@ -26,7 +26,7 @@
 (*                                                                                *)
 (**********************************************************************************)
 
-From stdpp Require Import base numbers list tactics.
+From stdpp Require Import base tactics decidable.
 From research Require Import bitvector.
 From RecordUpdate Require Import RecordUpdate.
 
@@ -163,7 +163,7 @@ Module Basic.
 
   Definition shift_and_add4' := repeat_shift_and_add' 4.
 
-  Lemma shift_and_add_correct : forall a b,
+  Lemma shift_and_add_equiv : forall a b,
       shift_and_add' (bv_unsigned b) (bv_unsigned a) =
         bv_unsigned (shift_and_add b a).
   Proof.
@@ -174,21 +174,21 @@ Module Basic.
     - Search (0 * _)%Z. rewrite Z.mul_0_l. bv_solve.
   Qed.
 
-  Lemma shift_and_add_repeat_correct : forall n a b,
+  Lemma shift_and_add_repeat_equiv : forall n a b,
       (repeat_shift_and_add' n) (bv_unsigned b) (bv_unsigned a) =
         bv_unsigned (repeat_shift_and_add n b a).
   Proof.
     intros n a b. induction n; simpl.
     - unfold repeat_shift_and_add', repeat_shift_and_add. done.
     - unfold repeat_shift_and_add', repeat_shift_and_add in *. simpl.
-      rewrite IHn. apply shift_and_add_correct.
+      rewrite IHn. apply shift_and_add_equiv.
   Qed.
 
-  Lemma shift_and_add4_correct : forall a b,
+  Lemma shift_and_add4_equiv : forall a b,
       shift_and_add4' (bv_unsigned b) (bv_unsigned a) =
         bv_unsigned (shift_and_add4 b a).
   Proof.
-    unfold shift_and_add4', shift_and_add4. apply shift_and_add_repeat_correct.
+    unfold shift_and_add4', shift_and_add4. apply shift_and_add_repeat_equiv.
   Qed.
 
   (* Tactic for exhaustive case analysis on integers in range [0,16) *)
@@ -217,7 +217,7 @@ Module Basic.
   Lemma shift_and_add4_multiplies : forall (a b : bv 4),
       bv_unsigned (shift_and_add4 b (bv_zero_extend 8 a)) = (bv_unsigned a * bv_unsigned b)%Z.
   Proof.
-    intros a b. rewrite <- shift_and_add4_correct.
+    intros a b. rewrite <- shift_and_add4_equiv.
     Search bv_unsigned bv_zero_extend. rewrite bv_zero_extend_unsigned.
     apply shift_and_add4'_multiplies. all: bv_solve.
   Qed.
@@ -231,6 +231,7 @@ Module Basic.
   Hint Resolve bv1_is_0_or_1 : multiplier.
 
   Definition busy (s : State) := s.(R).(RBusy) = 1.
+  Definition finished (s : State) := s.(R).(RCount) = 0.
   Definition valid (i : In) := i.(InValid) = 1.
 
   Hint Extern 1 (_ = _ :> bv 1) =>
@@ -241,9 +242,9 @@ Module Basic.
 
   Lemma cycle_idle_valid : forall s s' a b i o,
       ~ busy s -> valid i -> a = i.(InA) -> b = i.(InB) -> (s', o) = cycle s i ->
-      s' = {| R := {| RA := 8#a; RB := b; RCount := 3; RBusy := 1 |};
-             T := s.(T) ++ [{| LeakValid := 1; LeakReady := 0 |}]
-        |} /\ o = Out0.
+      s' = s <| R := {| RA := 8#a; RB := b; RCount := 3; RBusy := 1 |} |>
+             <| T := s.(T) ++ [{| LeakValid := 1; LeakReady := 0 |}] |>
+       /\ o = Out0.
   Proof.
     repeat progress (intros; simpl; subst).
     unfold cycle in *. unfold bv_eqb in *. unfold busy in *.
@@ -254,7 +255,7 @@ Module Basic.
 
   Lemma cycle_idle_invalid : forall s s' i o,
       ~ busy s -> ~ valid i -> (s', o) = cycle s i ->
-      s' = {| R := s.(R); T := s.(T) ++ [{| LeakValid := 0; LeakReady := 0 |}] |}
+      s' = s <| T := s.(T) ++  [{| LeakValid := 0; LeakReady := 0 |}] |>
       /\ o = Out0.
   Proof.
     repeat progress (intros; simpl; subst).
@@ -263,6 +264,35 @@ Module Basic.
     assert (i.(InValid) = 0) by auto with multiplier.
     rewrite H2, H3 in H1. simpl in *. inversion H1; clear H1.
     done.
+  Qed.
+
+  Lemma cycle_busy_unfinished : forall s s' i o,
+      busy s -> ~ finished s -> (s', o) = cycle s i ->
+      s' = s <| R; RA := shift_and_add s.(R).(RB) s.(R).(RA) |>
+             <| R; RCount := s.(R).(RCount) - 1 |>
+             <| T := s.(T) ++ [{| LeakValid := i.(InValid); LeakReady := 0 |}] |>
+      /\ o = Out0.
+  Proof.
+    repeat progress (intros; simpl; subst).
+    unfold cycle, bv_eqb, busy, finished in *.
+    rewrite H in H1; simpl in *.
+    destruct (bv_eq_dec 2 (RCount (R s)) 0) as [Heq | Hneq].
+    - done.
+    - inversion H1; clear H1; subst. intuition congruence.
+  Qed.
+
+  Lemma cycle_busy_finished : forall s s' i o,
+      busy s -> finished s -> (s', o) = cycle s i ->
+      s' = s <| R; RA := shift_and_add s.(R).(RB) s.(R).(RA) |>
+             <| R; RCount := 0 |>
+             <| R; RBusy := 0 |>
+             <| T := s.(T) ++ [{| LeakValid := i.(InValid); LeakReady := 1 |}] |>
+      /\ o = {| OutP := s'.(R).(RA); OutReady := 1 |}.
+  Proof.
+    repeat progress (intros; simpl; subst).
+    unfold cycle, bv_eqb, busy, finished in *.
+    rewrite H in H1; simpl in *. rewrite H0 in H1.
+    simpl in *. inversion H1; clear H1; subst. done.
   Qed.
 
   (** NOTE knwabueze for aerbsen: I think we talked about using this definition
