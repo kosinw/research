@@ -87,7 +87,7 @@ Module Circuit1.
   Definition shift_and_add (b : bv 4) (a : bv 8) : bv 8 :=
     let t0 := bv_extract 4 5 a in
     let t1 := if bv_odd a then 5#b else 0 in
-    bv_concat 8 (t0 + t1) (bv_extract 1 3 a).
+    (t0 + t1) || (bv_extract 1 3 a).
 
   Definition cycle (s : State) (x : In) : State * Out :=
     if s.(R).(RBusy) =? 0
