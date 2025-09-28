@@ -1,6 +1,0 @@
--R . Research
-
-Tactics.v
-Bits.v
-Monad.v
-Multiplier2.v

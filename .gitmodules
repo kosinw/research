@@ -1,3 +1,6 @@
-[submodule "vendor/coqutil"]
-	path = vendor/coqutil
-	url = https://github.com/mit-plv/coqutil
+[submodule "vendor/stdpp"]
+	path = vendor/stdpp
+	url = https://gitlab.mpi-sws.org/iris/stdpp
+[submodule "vendor/record-update"]
+	path = vendor/record-update
+	url = https://github.com/tchajed/coq-record-update.git
