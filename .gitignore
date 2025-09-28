@@ -3,5 +3,6 @@
 *.vok
 *.glob
 .*.aux
+*.cache
 .coqdeps.d
 _CoqProject
