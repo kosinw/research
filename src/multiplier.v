@@ -35,6 +35,7 @@ Local Open Scope bv_scope.
 Ltac Zify.zify_post_hook ::= Z.div_mod_to_equations.
 
 Ltac simplify := repeat progress (intros; csimpl in *; subst).
+Ltac equality := intuition congruence.
 
 Definition make_visible {X} (f : X) := f.
 
@@ -125,20 +126,16 @@ Definition cycle (s : State) (x : In) : State * Out :=
       let s' := mkState r' t' in
       (s', Out0).
 
-Fixpoint cycles (s : State) (xs : list In) : State * list Out :=
-  match xs with
-  | [] => (s, [])
-  | x :: xs' =>
-      let (s', y) := cycle s x in
-      let (s'', ys) := cycles s' xs' in
-      (s'', y :: ys)
-  end.
-
-Definition cycle' s x := fst (cycle s x).
-
-Definition cycles' s xs := fold_left cycle' xs s.
-
 Section functional.
+  Fixpoint cycles (s : State) (xs : list In) : State * list Out :=
+    match xs with
+    | [] => (s, [])
+    | x :: xs' =>
+        let (s', y) := cycle s x in
+        let (s'', ys) := cycles s' xs' in
+        (s'', y :: ys)
+    end.
+
   Fixpoint repeat {A : Type} (f : A -> A) (n : nat) {struct n} : (A -> A) :=
     match n with
     | O => id
@@ -227,21 +224,43 @@ Section functional.
     unfold bv_modulus in *; simplify. nia.
   Qed.
 
-  Lemma bv1_is_0_or_1 : forall (b : bv 1), b = 0 \/ b = 1.
+  Lemma bv_eqb_eq {n} : forall (x y : bv n), (x =? y) = true <-> x = y.
   Proof.
-    intro b. Search "bv" "ind".
-    apply bv_1_ind with (P := (fun b => b = 0 \/ b = 1)); intuition congruence.
+    intuition; simplify.
+    - unfold bv_eqb in *. destruct (bv_eq_dec n x y); done.
+    - unfold bv_eqb. destruct (bv_eq_dec n y y); easy.
   Qed.
 
-  Definition busy (s : State) := s.(R).(r_busy) = 1.
+  Lemma bv_eqb_neq {n} : forall (x y : bv n), (x =? y) = false <-> x <> y.
+  Proof.
+    intuition; simplify.
+    - unfold bv_eqb in *. destruct (bv_eq_dec n y y); done.
+    - unfold bv_eqb. destruct (bv_eq_dec n x y); done.
+  Qed.
+
+  Lemma bv_not_zero_one : forall (x : bv 1), x <> 0 <-> x = 1.
+  Proof.
+    simplify.
+    assert (x = 0 \/ x = 1).
+    { apply bv_1_ind with (P := (fun x => x = 0 \/ x = 1)); equality. }
+    split; simplify.
+    - destruct_or!; done.
+    - destruct_or!; done.
+  Qed.
+
+  Lemma bv_not_one_zero : forall (x : bv 1), x <> 1 <-> x = 0.
+  Proof.
+    simplify.
+    assert (x = 0 \/ x = 1).
+    { apply bv_1_ind with (P := (fun x => x = 0 \/ x = 1)); equality. }
+    split; simplify.
+    - destruct_or!; done.
+    - destruct_or!; done.
+  Qed.
+
+  Definition busy (s : State) := s.(R).(r_busy) <> 0.
   Definition finished (s : State) := s.(R).(r_cnt) = 0.
   Definition valid (x : In) := x.(in_valid) = 1.
-
-  Hint Extern 1 (_ = _ :> bv 1) =>
-         match goal with
-         | |- ?b = 0 :> bv 1 => pose proof (bv1_is_0_or_1 b); intuition
-| |- ?b = 1 :> bv 1 => pose proof (bv1_is_0_or_1 b); intuition
-  end : multiplier.
 
   Definition cycle_idle_valid s1 x s2 y : Prop :=
     ~ busy s1 -> valid x -> (s2, y) = cycle s1 x ->
@@ -252,10 +271,10 @@ Section functional.
   Lemma cycle_idle_valid_holds : forall s1 x s2 y, cycle_idle_valid s1 x s2 y.
   Proof.
     unfold cycle_idle_valid. simplify.
-    unfold cycle in *. unfold bv_eqb in *. unfold busy in *.
-    unfold valid in *. assert (s1.(R).(r_busy) = 0) by auto with multiplier.
-    repeat rewrite H2 in H1. simplify. rewrite H0 in H1.
-    simplify. inv H1. done.
+    unfold cycle in *. unfold busy in *.
+    unfold valid in *. rewrite <- bv_eqb_neq in H.
+    Search (_ <> false). apply not_false_is_true in H.
+    rewrite H in H1. rewrite H0 in H1. simplify. done.
   Qed.
 
   Definition cycle_idle_invalid s1 x s2 y : Prop :=
@@ -266,10 +285,10 @@ Section functional.
   Lemma cycle_idle_invalid_holds : forall s1 x s2 y, cycle_idle_invalid s1 x s2 y.
   Proof.
     unfold cycle_idle_invalid. simplify.
-    unfold cycle, bv_eqb, busy, valid in *.
-    assert (s1.(R).(r_busy) = 0) by auto with multiplier.
-    assert (x.(in_valid) = 0) by auto with multiplier.
-    rewrite H2, H3 in H1. simplify. inv H1. done.
+    unfold cycle, busy, valid in *.
+    rewrite <- bv_eqb_neq in H. apply not_false_is_true in H.
+    rewrite H in H1. rewrite bv_not_one_zero in H0.
+    rewrite H0 in H1; simplify. done.
   Qed.
 
   Definition cycle_busy_unfinished s1 x s2 y : Prop :=
@@ -282,11 +301,10 @@ Section functional.
   Lemma cycle_busy_unfinished_holds : forall s1 x s2 y, cycle_busy_unfinished s1 x s2 y.
   Proof.
     unfold cycle_busy_unfinished. simplify.
-    unfold cycle, bv_eqb, busy, finished in *.
-    rewrite H in H1; simplify.
-    destruct (bv_eq_dec 2 (r_cnt (R s1)) 0) as [Heq | Hneq].
-    - done.
-    - inv H1. intuition congruence.
+    unfold cycle, busy, finished in *.
+    rewrite bv_not_zero_one in H. rewrite H in H1.
+    simplify. rewrite <- bv_eqb_neq in H0. rewrite H0 in H1.
+    rewrite H. done.
   Qed.
 
   Definition cycle_busy_finished s1 x s2 y : Prop :=
@@ -300,9 +318,9 @@ Section functional.
   Lemma cycle_busy_finished_holds : forall s1 x s2 y, cycle_busy_finished s1 x s2 y.
   Proof.
     unfold cycle_busy_finished. simplify.
-    unfold cycle, bv_eqb, busy, finished in *.
-    rewrite H in H1; simplify. rewrite H0 in H1.
-    simplify. inv H1. done.
+    unfold cycle, busy, finished in *.
+    rewrite H0 in H1. rewrite bv_not_zero_one in H.
+    rewrite H in H1. simplify. inv H1. done.
   Qed.
 
   Ltac unroll_cycle_predicates :=
@@ -326,9 +344,11 @@ Section functional.
       end.
 
   Ltac cycles_correct_auto :=
-    unfold_pairs; subst; try (unroll_cycle_predicates; solve
-                                                         [ intuition
-                                                         | simplify; bv_solve ]).
+    unfold_pairs; subst;
+    try (unroll_cycle_predicates;
+         solve
+           [ intuition
+           | simplify; bv_solve ]).
 
   (* Finally, with all those helper theorems out of the way, we can now prove
      the following correctness property:
@@ -346,7 +366,7 @@ Section functional.
     apply cycle_busy_unfinished_holds in Hlet2; cycles_correct_auto.
     apply cycle_busy_unfinished_holds in Hlet3; cycles_correct_auto.
     apply cycle_busy_finished_holds   in Hlet4; cycles_correct_auto.
-    simplify. repeat progress f_equal. by apply shift_and_add4_correct.
+    simplify. repeat f_equal. by apply shift_and_add4_correct.
   Qed.
 End functional.
 
@@ -355,25 +375,27 @@ End functional.
 
    {[ Definition SLeakage := bv 4.
 
-      Definition extract : list In -> list SLeakage := flat_map (fun i => if
-        i.(in_valid) =? 1 then [i.(in_A)] else []). ]}
+      Definition extract : list In -> list SLeakage :=
+        flat_map (fun i => if i.(in_valid) =? 1 then [i.(in_A)] else []). ]}
 
-    However, I think this original definition is problematic. The predictor
-    function would need to know whether or not a value for [A] was provided on
-    each cycle, not just the total list of provided values. *)
+   However, I think this original definition is problematic. The predictor
+   function would need to know whether or not a value for [A] was provided on
+   each cycle, not just the total list of provided values. *)
 
 Section ct.
+  Definition cycle' s x :=
+    fst (cycle s x).
+
+  Definition cycles' s xs :=
+    fold_left cycle' xs s.
+
   Definition SLeakage := option (bv 4).
 
-  Definition extract x := if x.(in_valid) =? 1 then Some x.(in_A) else None.
+  Definition extract1 x :=
+    if x.(in_valid) =? 1 then Some x.(in_A) else None.
 
-  Definition extract_many : list In -> list SLeakage := map extract.
-
-  (* Predictor function uses the prefix of the specification leakage trace to
-     predict the next item in the implementation leakage trace.
-
-     The predictor can be seen as a state machine with some simulation relation
-     [R] to our circuit. *)
+  Definition extract :=
+    map extract1.
 
   Record PredictorState :=
     mkPredictorState { ps_count : option nat ; ps_valid : bool }.
@@ -399,17 +421,17 @@ Section ct.
         end
     end.
 
-  Definition predictor_steps (st : PredictorState) (ss : list SLeakage) :=
+  Definition predictor_steps st ss :=
     fold_left predictor_step ss st.
 
   Definition predict_next prefix :=
     match predictor_steps PredictorState0 prefix with
     | {| ps_count := Some (S _); ps_valid := v |} =>
-        {| leak_valid := bool_to_bv 1 v; leak_ready := 0 |}
+        {| leak_valid := if v then 1 else 0; leak_ready := 0 |}
     | {| ps_count := Some O; ps_valid := v |} =>
-        {| leak_valid := bool_to_bv 1 v; leak_ready := 1 |}
+        {| leak_valid := if v then 1 else 0; leak_ready := 1 |}
     | {| ps_count := None; ps_valid := v |} =>
-        {| leak_valid := bool_to_bv 1 v; leak_ready := 0 |}
+        {| leak_valid := if v then 1 else 0; leak_ready := 0 |}
     end.
 
   Fixpoint predict' prefix xs :=
@@ -420,7 +442,7 @@ Section ct.
 
   Definition predict xs := predict' [] xs.
 
-  Lemma predict_continuity' : forall ys y t t' p,
+  Lemma predict_app' : forall ys y t t' p,
       t = predict' p ys ->
       t' = predict' p (ys ++ [y]) ->
       t' = t ++ [predict_next (p ++ ys ++ [y])].
@@ -437,34 +459,73 @@ Section ct.
       rewrite app_assoc. apply IHys'; done.
   Qed.
 
-  Corollary predict_continuity : forall ys y t t',
-      t = predict ys ->
-      t' = predict (ys ++ [y]) ->
-      t' = t ++ [predict_next (ys ++ [y])].
+  Lemma predict_app : forall ys y,
+      predict (ys ++ [y]) = predict ys ++ [predict_next (ys ++ [y])].
   Proof.
     unfold predict; intros.
     Search ([] ++ _ = _).
     replace ys with ([] ++ ys) by apply app_nil_l.
     rewrite <- app_assoc.
-    apply predict_continuity'; done.
+    apply predict_app'; done.
   Qed.
 
-  Lemma cycles_continuity' : forall ,
-      s' = cycles' s xs ->
-      s'' = cycle' s' x ->
-      s''.(T) = s'.(T)
+  Definition cycles_leak_next (s : State) (x : In) :=
+    if s.(R).(r_busy) =? 0
+    then {| leak_valid := x.(in_valid); leak_ready := 0 |}
+    else
+      if s.(R).(r_cnt) =? 0
+      then {| leak_valid := x.(in_valid); leak_ready := 1  |}
+      else {| leak_valid := x.(in_valid); leak_ready := 0 |}.
 
-  (* First, we need a helper lemma that talks about one cycle's behavior on a the
-     implementation leakage trace. This follows by doing cases analysis on the
-     four fundamental outcomes that may happen on a cycle:
+  Lemma cycles_app : forall xs x s1 s2 s3,
+      s2 = cycles' s1 xs ->
+      s3 = cycles' s1 (xs ++ [x]) ->
+      s3.(T) = s2.(T) ++ [cycles_leak_next s2 x].
+  Proof.
+    induction xs as [| y ys IHys ]; intros.
+    - simplify. unfold cycle'.
+      unfold cycle, cycles_leak_next.
+      repeat case_match; equality.
+    - apply IHys with (s1 := (cycle' s1 y)).
+      + simplify. equality.
+      + simplify. equality.
+  Qed.
 
-     1. The circuit is idle and recieves an invalid input.
-     2. The circuit is idle and recieves a valid input.
-     3. The circuit is busy, but r_cnt > 0.
-     4. The circuit is busy, but r_cnt = 0. *)
+  Lemma predict_next_correct : forall xs x ys s,
+      ys = extract (xs ++ [x]) ->
+      s = cycles' State0 xs ->
+      cycles_leak_next s x = predict_next ys.
+  Proof.
+    intros xs. apply rev_ind with (l := xs); simplify.
+    - unfold cycles_leak_next, predict_next. simplify.
+      repeat case_match; try equality.
+      + inv H1. unfold extract1 in *. case_match; try equality.
+        rewrite bv_eqb_eq in H. equality.
+      + inv H1. unfold extract1 in *. case_match; try equality.
+        rewrite bv_eqb_neq in H. rewrite bv_not_one_zero in H.
+        rewrite H. equality.
+    - admit.
+  Admitted.
+
+
   Theorem cycles_ct : exists f, forall xs ys s,
-      ys = extract_many xs ->
+      ys = extract xs ->
       s = cycles' State0 xs ->
       s.(T) = f ys.
-  Admitted.
+  Proof.
+    unfold extract. exists predict. intros xs.
+    apply rev_ind with (l := xs); simplify.
+    - equality.
+    - Search (map _ (_ ++ _)). rewrite map_app.
+      simplify. rewrite predict_app.
+      rewrite cycles_app with (x := x) (xs := l)
+             (s1 := State0)
+             (s2 := (cycles' State0 l))
+        by equality.
+      rewrite <- H with (s := (cycles' State0 l)) by equality.
+      repeat f_equal. fold extract.
+      replace (extract l ++ [extract1 x]) with (extract (l ++ [x])) at 1
+        by (unfold extract; rewrite map_app; equality).
+      apply predict_next_correct with (xs := l); easy.
+  Qed.
 End ct.
