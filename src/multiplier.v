@@ -469,7 +469,7 @@ Section ct.
     apply predict_app'; done.
   Qed.
 
-  Definition cycles_leak_next (s : State) (x : In) :=
+  Definition next_ileak (s : State) (x : In) :=
     if s.(R).(r_busy) =? 0
     then {| leak_valid := x.(in_valid); leak_ready := 0 |}
     else
@@ -480,33 +480,65 @@ Section ct.
   Lemma cycles_app : forall xs x s1 s2 s3,
       s2 = cycles' s1 xs ->
       s3 = cycles' s1 (xs ++ [x]) ->
-      s3.(T) = s2.(T) ++ [cycles_leak_next s2 x].
+      s3.(T) = s2.(T) ++ [next_ileak s2 x].
   Proof.
     induction xs as [| y ys IHys ]; intros.
     - simplify. unfold cycle'.
-      unfold cycle, cycles_leak_next.
+      unfold cycle, next_ileak.
       repeat case_match; equality.
-    - apply IHys with (s1 := (cycle' s1 y)).
-      + simplify. equality.
-      + simplify. equality.
+    - apply IHys with (s1 := (cycle' s1 y)); equality.
   Qed.
+
+  Lemma destruct_snoc {A} : forall (xs : list A),
+      xs = [] \/ (exists ys y, xs = ys ++ [y]).
+  Proof.
+    intros xs. apply rev_ind with (l := xs); simplify.
+    - left. equality.
+    - right. exists l. exists x. equality.
+  Qed.
+
+  Lemma predict_next_correct' : forall xs1 xs2 x ys s,
+      ys = extract (xs1 ++ xs2 ++ [x]) ->
+      s = cycles' State0 (xs1 ++ xs2) ->
+      next_ileak s x = predict_next ys.
+  Proof.
+    intros xs1. apply rev_ind with (l := xs1).
+    - intros xs2. apply rev_ind with (l := xs2); simplify.
+      + unfold next_ileak, predict_next, extract1; simplify.
+        repeat case_match; try equality.
+        * inv H. rewrite bv_eqb_eq in H1.
+          rewrite H1. equality.
+        * inv H. rewrite bv_eqb_neq in H1.
+          rewrite bv_not_one_zero in H1.
+          rewrite H1. equality.
+      + admit.
+    - simplify. destruct (destruct_snoc xs2); subst.
+      + repeat rewrite <- app_assoc.
+        replace (l ++ [x] ++ [] ++ [x0])
+          with ((l ++ [x] ++ []) ++ [x0]); cycle 1.
+        { simplify. rewrite <- app_assoc. equality. }
+        replace ([x] ++ []) with ([] ++ [x]) by equality.
+        rewrite <- app_assoc.
+        replace ([] ++ [x]) with ([x]) by equality.
+        apply H with (xs2 := [x]); equality.
+      + inv H0. inv H1.
+        replace ((l ++ [x]) ++ x1 ++ [x2])
+          with (l ++ ([x] ++ x1 ++ [x2])); cycle 1.
+        { simplify. rewrite <- app_assoc. equality. }
+        replace ((l ++ [x]) ++ (x1 ++ [x2]) ++ [x0])
+          with (l ++ ([x] ++ x1 ++ [x2]) ++ [x0]); cycle 1.
+        { simplify. repeat rewrite <- app_assoc. equality. }
+        apply H with (xs2 := ([x] ++ x1 ++ [x2])); equality.
+  Admitted.
 
   Lemma predict_next_correct : forall xs x ys s,
       ys = extract (xs ++ [x]) ->
       s = cycles' State0 xs ->
-      cycles_leak_next s x = predict_next ys.
+      next_ileak s x = predict_next ys.
   Proof.
-    intros xs. apply rev_ind with (l := xs); simplify.
-    - unfold cycles_leak_next, predict_next. simplify.
-      repeat case_match; try equality.
-      + inv H1. unfold extract1 in *. case_match; try equality.
-        rewrite bv_eqb_eq in H. equality.
-      + inv H1. unfold extract1 in *. case_match; try equality.
-        rewrite bv_eqb_neq in H. rewrite bv_not_one_zero in H.
-        rewrite H. equality.
-    - admit.
-  Admitted.
-
+    simplify. apply predict_next_correct' with (xs1 := xs) (xs2 := []).
+    equality. rewrite app_nil_r. equality.
+  Qed.
 
   Theorem cycles_ct : exists f, forall xs ys s,
       ys = extract xs ->
@@ -526,6 +558,6 @@ Section ct.
       repeat f_equal. fold extract.
       replace (extract l ++ [extract1 x]) with (extract (l ++ [x])) at 1
         by (unfold extract; rewrite map_app; equality).
-      apply predict_next_correct with (xs := l); easy.
+      apply predict_next_correct with (xs := l); equality.
   Qed.
 End ct.
