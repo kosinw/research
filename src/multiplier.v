@@ -370,194 +370,220 @@ Section functional.
   Qed.
 End functional.
 
-(* NOTE knwabueze for aerbsen: I think we talked about using this definition for
-   the extraction from the list of inputs to the specification leakage.
-
-   {[ Definition SLeakage := bv 4.
-
-      Definition extract : list In -> list SLeakage :=
-        flat_map (fun i => if i.(in_valid) =? 1 then [i.(in_A)] else []). ]}
-
-   However, I think this original definition is problematic. The predictor
-   function would need to know whether or not a value for [A] was provided on
-   each cycle, not just the total list of provided values. *)
-
 Section ct.
-  Definition cycle' s x :=
-    fst (cycle s x).
+  Definition cycle' s x := fst (cycle s x).
 
-  Definition cycles' s xs :=
-    fold_left cycle' xs s.
+  Definition cycles' s xs := fold_left cycle' xs s.
 
   Definition SLeakage := option (bv 4).
 
-  Definition extract1 x :=
-    if x.(in_valid) =? 1 then Some x.(in_A) else None.
+  Definition public1 x := if x.(in_valid) =? 1 then Some x.(in_A) else None.
 
-  Definition extract :=
-    map extract1.
+  Definition public := map public1.
 
-  Record PredictorState :=
-    mkPredictorState { ps_count : option nat ; ps_valid : bool }.
-
-  Definition PredictorState0 := mkPredictorState None false.
+  Definition PredictorState := option nat.
 
   Definition predictor_step (st : PredictorState) (s : SLeakage) :=
     match st with
-    | {| ps_count := Some (S n) |} =>
+    | Some (S n) => Some n
+    | Some O => None
+    | None =>
         match s with
-        | Some _ => {| ps_count := Some n; ps_valid := true |}
-        | None   => {| ps_count := Some n; ps_valid := false |}
-        end
-    | {| ps_count := Some O |} =>
-        match s with
-        | Some _ => {| ps_count := None; ps_valid := true |}
-        | None   => {| ps_count := None; ps_valid := false |}
-        end
-    | {| ps_count := None |} =>
-        match s with
-        | Some _ => {| ps_count := Some 4%nat; ps_valid := true |}
-        | None   => {| ps_count := None; ps_valid := false |}
+        | Some _ => Some 3%nat
+        | None   => None
         end
     end.
 
-  Definition predictor_steps st ss :=
-    fold_left predictor_step ss st.
+  Definition predictor_steps (st : PredictorState) (xs : list SLeakage) :=
+    fold_left predictor_step xs st.
 
-  Definition predict_next prefix :=
-    match predictor_steps PredictorState0 prefix with
-    | {| ps_count := Some (S _); ps_valid := v |} =>
-        {| leak_valid := if v then 1 else 0; leak_ready := 0 |}
-    | {| ps_count := Some O; ps_valid := v |} =>
-        {| leak_valid := if v then 1 else 0; leak_ready := 1 |}
-    | {| ps_count := None; ps_valid := v |} =>
-        {| leak_valid := if v then 1 else 0; leak_ready := 0 |}
+  Definition predict_next (st : PredictorState) (s : SLeakage) :=
+    match st with
+    | Some O =>
+        match s with
+        | Some _ => {| leak_valid := 1; leak_ready := 1 |}
+        | None => {| leak_valid := 0; leak_ready := 1 |}
+        end
+    | _ =>
+        match s with
+        | Some _ => {| leak_valid := 1; leak_ready := 0 |}
+        | None => {| leak_valid := 0; leak_ready := 0 |}
+        end
     end.
 
-  Fixpoint predict' prefix xs :=
+  Fixpoint predict' st xs :=
     match xs with
     | [] => []
-    | x :: xs' => predict_next (prefix ++ [x]) :: predict' (prefix ++ [x]) xs'
+    | x :: xs' => predict_next st x :: predict' (predictor_step st x) xs'
     end.
 
-  Definition predict xs := predict' [] xs.
+  Definition predict xs := predict' None xs.
 
-  Lemma predict_app' : forall ys y t t' p,
-      t = predict' p ys ->
-      t' = predict' p (ys ++ [y]) ->
-      t' = t ++ [predict_next (p ++ ys ++ [y])].
+  Section ex.
+    Let xs := [mkIn 3 4 1; In0; In0; In0; In0; In0].
+
+    Compute (cycles' State0 xs, predict (public xs)).
+  End ex.
+
+  Definition rep (x : State) (y : PredictorState) : Prop :=
+    (exists v, y = Some v /\
+            bv_unsigned x.(R).(r_cnt) = (Z.of_nat v) /\
+            (v <= 3)%nat /\
+            x.(R).(r_busy) = 1
+    )
+    \/ (y = None /\ x.(R).(r_busy) = 0).
+
+  Lemma bv_not_zero_nat_succ {l} : forall (b : bv l) n,
+      bv_unsigned b = Z.of_nat (S n) -> b <> (bv_0 l).
   Proof.
-    induction ys as [| y' ys']; simplify.
-    - done.
-    - f_equal.
-      replace (p ++ y' :: ys' ++ [y]) with (p ++ [y'] ++ ys' ++ [y]); cycle 1.
-      { Search (_ ++ _ :: _ = _ ++ [_] ++ _). rewrite <- cons_middle. done. }
-      specialize (IHys' y
-                    (predict' (p ++ [y']) ys')
-                    (predict' (p ++ [y']) (ys' ++ [y]))
-                    (p ++ [y'])).
-      rewrite app_assoc. apply IHys'; done.
+    simplify. intuition. rewrite bv_eq in H0.
+    rewrite H in H0. Search bv_unsigned.
+    rewrite bv_0_unsigned in H0. lia.
   Qed.
 
-  Lemma predict_app : forall ys y,
-      predict (ys ++ [y]) = predict ys ++ [predict_next (ys ++ [y])].
+  Lemma simulation_step : forall s1 s2 s1' s2' x,
+      rep s1 s2 ->
+      s1' = cycle' s1 x ->
+      s2' = predictor_step s2 (public1 x) ->
+      rep s1' s2'.
   Proof.
-    unfold predict; intros.
-    Search ([] ++ _ = _).
-    replace ys with ([] ++ ys) by apply app_nil_l.
-    rewrite <- app_assoc.
-    apply predict_app'; done.
+    unfold rep, cycle', cycle, predictor_step, public1.
+    simplify. inv H.
+    - inv H0 as [v]. inv H. inv H1. inv H0. destruct v as [| v'].
+      + assert (s1.(R).(r_cnt) = 0) by bv_solve.
+        right. rewrite H0. rewrite H2. done.
+      + left. exists v'. intuition; try lia.
+        * rewrite H2. simplify. pose proof H.
+          apply bv_not_zero_nat_succ in H.
+          rewrite <- bv_eqb_eq in H.
+          apply not_true_is_false in H.
+          replace 0 with (bv_0 2) by bv_solve.
+          rewrite H. simplify. bv_simplify.
+          rewrite H0. unfold bv_wrap, bv_modulus.
+          lia.
+        * rewrite H2. simplify. pose proof H.
+          apply bv_not_zero_nat_succ in H.
+          rewrite <- bv_eqb_eq in H.
+          apply not_true_is_false in H.
+          replace 0 with (bv_0 2) by bv_solve.
+          rewrite H. simplify. equality.
+    - inv H0. rewrite H1. simplify. repeat case_match; try equality.
+      left. exists 3%nat. intuition.
   Qed.
 
-  Definition next_ileak (s : State) (x : In) :=
-    if s.(R).(r_busy) =? 0
-    then {| leak_valid := x.(in_valid); leak_ready := 0 |}
-    else
-      if s.(R).(r_cnt) =? 0
-      then {| leak_valid := x.(in_valid); leak_ready := 1  |}
-      else {| leak_valid := x.(in_valid); leak_ready := 0 |}.
+  Lemma simulation_initial : rep State0 None.
+  Proof.
+    unfold rep. simplify. right. equality.
+  Qed.
 
-  Lemma cycles_app : forall xs x s1 s2 s3,
+  Lemma simulation_many_step : forall xs s1 s2 s1' s2',
+    rep s1 s2 ->
+    s1' = cycles' s1 xs ->
+    s2' = predictor_steps s2 (public xs) ->
+    rep s1' s2'.
+  Proof.
+    induction xs as [| y ys IHy ]; simplify; try equality.
+    - assert (rep (cycle' s1 y) (predictor_step s2 (public1 y))).
+      { apply simulation_step with (s1 := s1) (s2 := s2) (x := y); eauto. }
+      unfold cycles', predictor_steps. eapply IHy.
+      apply H0. equality. equality.
+  Qed.
+
+  Definition leak_next (s : State) (x : In) :=
+    let valid := x.(in_valid) in
+    let ready :=
+      if s.(R).(r_busy) =? 1
+      then
+        if s.(R).(r_cnt) =? 0
+        then 1
+        else 0
+      else 0
+    in
+    {| leak_valid := valid; leak_ready := ready |}.
+
+  Lemma simulation_predict_leak : forall s1 s2 x,
+      rep s1 s2 ->
+      leak_next s1 x = predict_next s2 (public1 x).
+  Proof.
+    unfold leak_next, predict_next, public1, rep.
+    simplify. inv H.
+    - inv H0. inv H. inv H1. inv H0. destruct x0 as [| z].
+      + assert (s1.(R).(r_cnt) = 0) by bv_solve.
+        destruct s1. destruct R0. simplify.
+        assert (in_valid x = 0 \/ in_valid x = 1).
+        { apply bv_1_ind with (P := (fun x => x = 0 \/ x = 1)); eauto. }
+        inv H0.
+        * rewrite H2; simplify. equality.
+        * rewrite H2; simplify. equality.
+      + apply bv_not_zero_nat_succ in H. destruct s1.
+        destruct R0. simplify. rewrite <- bv_eqb_neq in H.
+        replace 0 with (bv_0 2) by bv_solve. rewrite H.
+        assert (in_valid x = 0 \/ in_valid x = 1).
+        { apply bv_1_ind with (P := (fun x => x = 0 \/ x = 1)); eauto. }
+        inv H0.
+        * rewrite H2; simplify. equality.
+        * rewrite H2; simplify. equality.
+    - inv H0. assert (in_valid x = 0 \/ in_valid x = 1).
+      { apply bv_1_ind with (P := (fun x => x = 0 \/ x = 1)); eauto. }
+      inv H.
+      + rewrite H0. simplify. destruct s1. destruct R0. simplify.
+        equality.
+      + rewrite H0. simplify. destruct s1. destruct R0. simplify.
+        equality.
+  Qed.
+
+  Lemma predict_app' : forall xs ys1 ys2 x s,
+      ys1 = predict' s xs ->
+      ys2 = predict' s (xs ++ [x]) ->
+      ys2 = ys1 ++ [predict_next (predictor_steps s xs) x].
+  Proof.
+    induction xs as [| z zs IHz ]; simplify.
+    - equality.
+    - f_equal. apply IHz; equality.
+  Qed.
+
+  Lemma predict_app : forall xs x,
+      predict (xs ++ [x]) =
+        predict xs ++ [predict_next (predictor_steps None xs) x].
+  Proof.
+    simplify. apply predict_app'; equality.
+  Qed.
+
+  Lemma cycles_app' : forall xs x s1 s2 s3,
       s2 = cycles' s1 xs ->
       s3 = cycles' s1 (xs ++ [x]) ->
-      s3.(T) = s2.(T) ++ [next_ileak s2 x].
+      s3.(T) = s2.(T) ++ [leak_next s2 x].
   Proof.
-    induction xs as [| y ys IHys ]; intros.
-    - simplify. unfold cycle'.
-      unfold cycle, next_ileak.
-      repeat case_match; equality.
-    - apply IHys with (s1 := (cycle' s1 y)); equality.
+    induction xs as [| z zs IHz ]; simplify.
+    - unfold cycle', cycle, leak_next. repeat case_match; try equality.
+      + rewrite bv_eqb_eq in H1. rewrite bv_eqb_eq in H.
+        rewrite H in H1. inv H1.
+      + rewrite bv_eqb_eq in H1. rewrite bv_eqb_eq in H.
+        rewrite H in H1. inv H1.
+      + rewrite bv_eqb_neq in H1. rewrite bv_eqb_neq in H.
+        apply bv_not_zero_one in H. contradiction.
+    - apply IHz with (s1 := (cycle' s1 z)); equality.
   Qed.
 
-  Lemma destruct_snoc {A} : forall (xs : list A),
-      xs = [] \/ (exists ys y, xs = ys ++ [y]).
+  Lemma cycles_app : forall xs x,
+      T (cycles' State0 (xs ++ [x])) =
+        T (cycles' State0 xs) ++ [leak_next (cycles' State0 xs) x].
   Proof.
-    intros xs. apply rev_ind with (l := xs); simplify.
-    - left. equality.
-    - right. exists l. exists x. equality.
+    simplify. apply cycles_app' with (xs := xs) (s1 := State0); equality.
   Qed.
 
-  Lemma predict_next_correct' : forall xs1 xs2 x ys s,
-      ys = extract (xs1 ++ xs2 ++ [x]) ->
-      s = cycles' State0 (xs1 ++ xs2) ->
-      next_ileak s x = predict_next ys.
+  Theorem cycles_ct : exists f, forall xs s,
+      s = cycles' State0 xs -> s.(T) = f (public xs).
   Proof.
-    intros xs1. apply rev_ind with (l := xs1).
-    - intros xs2. apply rev_ind with (l := xs2); simplify.
-      + unfold next_ileak, predict_next, extract1; simplify.
-        repeat case_match; try equality.
-        * inv H. rewrite bv_eqb_eq in H1.
-          rewrite H1. equality.
-        * inv H. rewrite bv_eqb_neq in H1.
-          rewrite bv_not_one_zero in H1.
-          rewrite H1. equality.
-      + admit.
-    - simplify. destruct (destruct_snoc xs2); subst.
-      + repeat rewrite <- app_assoc.
-        replace (l ++ [x] ++ [] ++ [x0])
-          with ((l ++ [x] ++ []) ++ [x0]); cycle 1.
-        { simplify. rewrite <- app_assoc. equality. }
-        replace ([x] ++ []) with ([] ++ [x]) by equality.
-        rewrite <- app_assoc.
-        replace ([] ++ [x]) with ([x]) by equality.
-        apply H with (xs2 := [x]); equality.
-      + inv H0. inv H1.
-        replace ((l ++ [x]) ++ x1 ++ [x2])
-          with (l ++ ([x] ++ x1 ++ [x2])); cycle 1.
-        { simplify. rewrite <- app_assoc. equality. }
-        replace ((l ++ [x]) ++ (x1 ++ [x2]) ++ [x0])
-          with (l ++ ([x] ++ x1 ++ [x2]) ++ [x0]); cycle 1.
-        { simplify. repeat rewrite <- app_assoc. equality. }
-        apply H with (xs2 := ([x] ++ x1 ++ [x2])); equality.
-  Admitted.
-
-  Lemma predict_next_correct : forall xs x ys s,
-      ys = extract (xs ++ [x]) ->
-      s = cycles' State0 xs ->
-      next_ileak s x = predict_next ys.
-  Proof.
-    simplify. apply predict_next_correct' with (xs1 := xs) (xs2 := []).
-    equality. rewrite app_nil_r. equality.
-  Qed.
-
-  Theorem cycles_ct : exists f, forall xs ys s,
-      ys = extract xs ->
-      s = cycles' State0 xs ->
-      s.(T) = f ys.
-  Proof.
-    unfold extract. exists predict. intros xs.
-    apply rev_ind with (l := xs); simplify.
+    exists predict.
+    induction xs as [| z zs IHz ] using rev_ind; simplify.
     - equality.
-    - Search (map _ (_ ++ _)). rewrite map_app.
-      simplify. rewrite predict_app.
-      rewrite cycles_app with (x := x) (xs := l)
-             (s1 := State0)
-             (s2 := (cycles' State0 l))
-        by equality.
-      rewrite <- H with (s := (cycles' State0 l)) by equality.
-      repeat f_equal. fold extract.
-      replace (extract l ++ [extract1 x]) with (extract (l ++ [x])) at 1
-        by (unfold extract; rewrite map_app; equality).
-      apply predict_next_correct with (xs := l); equality.
+    - rewrite cycles_app. unfold public. rewrite map_app.
+      simplify. rewrite predict_app. rewrite IHz by equality.
+      unfold public. repeat f_equal. apply simulation_predict_leak.
+      apply simulation_many_step with (xs := zs) (s1 := State0) (s2 := None).
+      + apply simulation_initial.
+      + equality.
+      + equality.
   Qed.
 End ct.
