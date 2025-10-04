@@ -1,3 +1,15 @@
+(* *********************************************************************************)
+(*                                                                                 *)
+(*             bitvector.v - Bitvector helpers, notations, and lemmas.             *)
+(*                                                                                 *)
+(*  Extends stdpp bitvectors with:                                                 *)
+(*   - Boolean equality [bv_eqb] and its correctness lemmas.                       *)
+(*   - Oddness predicate [bv_odd] and notations [=?], [#], [||], [x ?].             *)
+(*   - Small 1-bit lemmas and tactic [simplify_bv_eqb].                            *)
+(*   - Zify hook enabling [lia] through [div]/[mod] goals.                         *)
+(*                                                                                 *)
+(***********************************************************************************)
+
 From research Require Import base.
 From stdpp Require Export bitvector.
 
@@ -50,6 +62,14 @@ Proof.
   split; simplify.
   - destruct_or!; equality.
   - destruct_or!; equality.
+Qed.
+
+Lemma bv_not_zero_nat_succ {l} : forall (b : bv l) n,
+    bv_unsigned b = Z.of_nat (S n) -> b <> (bv_0 l).
+Proof.
+  simplify. intuition. rewrite bv_eq in H0.
+  rewrite H in H0. Search bv_unsigned.
+  rewrite bv_0_unsigned in H0. lia.
 Qed.
 
 Ltac simplify_bv_eqb :=

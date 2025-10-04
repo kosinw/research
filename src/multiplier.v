@@ -39,15 +39,11 @@ Section definitions.
     ; r_busy : bv 1
     }.
 
-  Definition Registers0 := {| r_A := 0; r_B := 0; r_cnt := 0; r_busy := 0 |}.
-
   Record In :=
    { in_A : bv 4
    ; in_B : bv 4
    ; in_valid : bv 1
    }.
-
-  Definition In0 := {| in_A := 0; in_B := 0; in_valid := 0 |}.
 
   Record Out :=
     { out_P : bv 8
@@ -64,7 +60,10 @@ Section definitions.
       T : list ILeakage;
       Y : list Out }.
 
-  Definition State0 := {| R := Registers0; T := []; Y := [] |}.
+  Definition State0 :=
+    {| R := {| r_A := 0; r_B := 0; r_cnt := 0; r_busy := 0 |}
+    ; T := []
+    ; Y := [] |}.
 
   (* One shift-and-add step: conditionally add `b` into the high half of `a` then
    shift-right by one by reassembly. *)
@@ -202,7 +201,7 @@ Section correctness.
     - bv_saturate_unsigned. unfold bv_modulus in *; simplify. nia.
   Qed.
 
-  Definition busy (s : State) := s.(R).(r_busy) <> 0.
+  Definition busy (s : State) := s.(R).(r_busy) = 1.
   Definition finished (s : State) := s.(R).(r_cnt) = 0.
   Definition valid (x : In) := x.(in_valid) = 1.
 
@@ -217,8 +216,8 @@ Section correctness.
     unfold cycle_idle_valid. simplify.
     unfold cycle in *. unfold busy in *.
     unfold valid in *. rewrite <- bv_eqb_neq in H.
-    Search (_ <> false). apply not_false_is_true in H.
-    rewrite H0. rewrite H. simplify. equality.
+    simplify_bv_eqb. rewrite H0. rewrite H.
+    simplify. equality.
   Qed.
 
   Definition cycle_idle_invalid s1 x s2 : Prop :=
@@ -230,9 +229,8 @@ Section correctness.
   Proof.
     unfold cycle_idle_invalid. simplify.
     unfold cycle, busy, valid in *.
-    simplify_bv_eqb.
-    rewrite <- bv_eqb_neq in H. apply not_false_is_true in H.
-    rewrite H. rewrite H0. simplify. equality.
+    simplify_bv_eqb. rewrite H. rewrite H0.
+    simplify. equality.
   Qed.
 
   Definition cycle_busy_unfinished s1 x s2 : Prop :=
@@ -267,8 +265,8 @@ Section correctness.
   Proof.
     unfold cycle_busy_finished. simplify.
     unfold cycle, busy, finished in *.
-    rewrite H0. rewrite bv_not_zero_one in H.
-    rewrite H. simplify. equality.
+    rewrite H0. simplify_bv_eqb. rewrite H.
+    simplify. equality.
   Qed.
 
   Tactic Notation "unfold*" :=
@@ -283,7 +281,8 @@ Section correctness.
      provided, four cycles later it will produce [a *| b]. *)
 
   Theorem cycles_correct: forall s1 x1 s2 x2 s3 x3 s4 x4 s5 x5 s6 a b,
-      ~ busy s1 -> x1 = {| in_A := a; in_B := b; in_valid := 1 |} ->
+      ~ busy s1 ->
+      x1 = {| in_A := a; in_B := b; in_valid := 1 |} ->
       s2 = cycle s1 x1 ->
       s3 = cycle s2 x2 ->
       s4 = cycle s3 x3 ->
@@ -355,14 +354,6 @@ Section ct.
             x.(R).(r_busy) = 1
     )
     \/ (y = None /\ x.(R).(r_busy) = 0).
-
-  Lemma bv_not_zero_nat_succ {l} : forall (b : bv l) n,
-      bv_unsigned b = Z.of_nat (S n) -> b <> (bv_0 l).
-  Proof.
-    simplify. intuition. rewrite bv_eq in H0.
-    rewrite H in H0. Search bv_unsigned.
-    rewrite bv_0_unsigned in H0. lia.
-  Qed.
 
   Lemma simulation_step : forall s1 s2 s1' s2' x,
       rep s1 s2 ->
