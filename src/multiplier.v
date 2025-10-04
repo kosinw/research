@@ -27,58 +27,44 @@
 (*                                                                                *)
 (**********************************************************************************)
 
-From stdpp Require Import base tactics bitvector list.
-From RecordUpdate Require Import RecordUpdate.
+From research Require Import base bitvector.
 
 Local Open Scope bv_scope.
 
-Ltac Zify.zify_post_hook ::= Z.div_mod_to_equations.
-
-Ltac simplify := repeat progress (intros; csimpl in *; subst).
-Ltac equality := intuition congruence.
-
-Definition make_visible {X} (f : X) := f.
-
-Notation "` f" := (make_visible f) (at level 10, format "` f").
-
-Tactic Notation "unfold" "notation" constr(f) := change f with (`f).
-Tactic Notation "fold" "notation" constr(f) := unfold make_visible.
-
-Definition bv_eqb {n} (x y : bv n) : bool :=
-  Eval cbv delta [ bool_decide decide_rel ] in
-    bool_decide (x = y).
-
-Definition bv_odd {n} (x : bv n) := Z.odd (bv_unsigned x).
-
-Infix "=?" := bv_eqb : bv_scope.
-Infix "#" := bv_zero_extend (at level 65) : bv_scope.
-Infix "||" := (bv_concat _) : bv_scope.
-
-Notation "x ?" := (bv_odd x) : bv_scope.
-
 Section definitions.
   Record Registers :=
-    mkRegisters { r_A : bv 8 ; r_B : bv 4 ; r_cnt : bv 2 ; r_busy : bv 1}.
+    { r_A : bv 8
+    ; r_B : bv 4
+    ; r_cnt : bv 2
+    ; r_busy : bv 1
+    }.
 
-  Definition Registers0 := mkRegisters 0 0 0 0.
+  Definition Registers0 := {| r_A := 0; r_B := 0; r_cnt := 0; r_busy := 0 |}.
 
   Record In :=
-    mkIn { in_A : bv 4 ; in_B : bv 4 ; in_valid : bv 1}.
+   { in_A : bv 4
+   ; in_B : bv 4
+   ; in_valid : bv 1
+   }.
 
-  Definition In0 := mkIn 0 0 0.
+  Definition In0 := {| in_A := 0; in_B := 0; in_valid := 0 |}.
 
   Record Out :=
-    mkOut { out_P : bv 8 ; out_ready : bv 1 }.
+    { out_P : bv 8
+    ; out_ready : bv 1 }.
 
-  Definition Out0 := mkOut 0 0.
+  Definition Out0 := {| out_P := 0; out_ready := 0 |}.
 
   Record ILeakage :=
-    mkILeak { leak_valid : bv 1 ; leak_ready : bv 1}.
+    { leak_valid : bv 1
+    ; leak_ready : bv 1 }.
 
   Record State :=
-    mkState { R : Registers; T : list ILeakage; Y : list Out }.
+    { R : Registers;
+      T : list ILeakage;
+      Y : list Out }.
 
-  Definition State0 := mkState Registers0 [] [].
+  Definition State0 := {| R := Registers0; T := []; Y := [] |}.
 
   (* One shift-and-add step: conditionally add `b` into the high half of `a` then
    shift-right by one by reassembly. *)
@@ -96,14 +82,13 @@ Section definitions.
         let rb' := x.(in_B) in
         let rcount' := 3 in
         let rbusy' := 1 in
-        let r' := mkRegisters ra' rb' rcount' rbusy' in
-        let t' := s.(T) ++ [mkILeak x.(in_valid) 0 ] in
+        let r' := {| r_A := ra'; r_B := rb'; r_cnt := rcount'; r_busy := rbusy' |} in
+        let t' := s.(T) ++ [{| leak_valid := 1; leak_ready := 0 |}] in
         let y' := s.(Y) ++ [Out0] in
         {| R := r'; T := t'; Y := y' |}
       else
-        let t' := s.(T) ++ [mkILeak x.(in_valid) 0 ] in
+        let t' := s.(T) ++ [{| leak_valid := 0; leak_ready := 0 |}] in
         let r' := s.(R) in
-        let s' := mkState r' t' in
         let y' := s.(Y) ++ [Out0] in
         {| R := r'; T := t'; Y := y' |}
     else
@@ -113,24 +98,22 @@ Section definitions.
       then
         let rcount' := 0 in
         let rbusy' := 0 in
-        let r' := mkRegisters ra' rb' rcount' rbusy' in
-        let t' := s.(T) ++ [mkILeak x.(in_valid) 1 ] in
-        let s' := mkState r' t' in
-        let y' := s.(Y) ++ [mkOut ra' 1] in
+        let r' := {| r_A := ra'; r_B := rb'; r_cnt := rcount'; r_busy := rbusy' |} in
+        let t' := s.(T) ++ [{| leak_valid := x.(in_valid); leak_ready := 1 |}] in
+        let y' := s.(Y) ++ [{| out_P := ra'; out_ready := 1 |}] in
         {| R := r'; T := t'; Y := y' |}
       else
-        let rcount' := s.(R).(r_cnt) - 1 in
+        let rcount' := bv_pred s.(R).(r_cnt) in
         let rbusy' := 1 in
-        let r' := mkRegisters ra' rb' rcount' rbusy' in
-        let t' := s.(T) ++ [mkILeak x.(in_valid) 0 ] in
-        let s' := mkState r' t' in
+        let r' := {| r_A := ra'; r_B := rb'; r_cnt := rcount'; r_busy := rbusy' |} in
+        let t' := s.(T) ++ [{| leak_valid := x.(in_valid); leak_ready := 0 |}] in
         let y' := s.(Y) ++ [Out0] in
         {| R := r'; T := t'; Y := y' |}.
 
   Definition cycles s xs := fold_left cycle xs s.
 End definitions.
 
-Section functional.
+Section correctness.
   Fixpoint repeat {A : Type} (f : A -> A) (n : nat) {struct n} : (A -> A) :=
     match n with
     | O => id
@@ -153,7 +136,7 @@ Section functional.
         bv_unsigned (shift_and_add b a).
   Proof.
     intros a b. unfold shift_and_add, shift_and_add'. bv_simplify.
-    unfold Z.of_N, bv_odd. unfold notation Z.modulo. Search (_ `mod` 2)%Z.
+    unfold Z.of_N, bv_odd.
     unfold bv_wrap. rewrite Zmod_odd. case_match.
     - replace (1 * bv_unsigned b)%Z with (bv_unsigned b) by lia. bv_solve.
     - Search (0 * _)%Z. rewrite Z.mul_0_l. bv_solve.
@@ -164,7 +147,7 @@ Section functional.
         bv_unsigned (repeat_shift_and_add n b a).
   Proof.
     intros n a b. induction n; simplify.
-    - unfold repeat_shift_and_add', repeat_shift_and_add. done.
+    - unfold repeat_shift_and_add', repeat_shift_and_add. equality.
     - unfold repeat_shift_and_add', repeat_shift_and_add in *. simplify.
       rewrite IHn. apply shift_and_add_equiv.
   Qed.
@@ -186,7 +169,7 @@ Section functional.
                     z = 8 \/ z = 9 \/ z = 10 \/ z = 11 \/ z = 12 \/ z = 13 \/ z = 14 \/ z = 15)%Z
             as Hz by lia; clear H;
           destruct_or?; subst
-      end; done.
+      end; equality.
 
   Lemma shift_and_add4'_multiplies : forall a b,
       (0 <= a < bv_modulus 4%N)%Z ->
@@ -215,42 +198,8 @@ Section functional.
     Search bv_zero_extend bv_unsigned.
     repeat rewrite bv_zero_extend_unsigned by lia.
     Check bv_wrap_small. rewrite bv_wrap_small.
-    apply shift_and_add4_multiplies. bv_saturate_unsigned.
-    unfold bv_modulus in *; simplify. nia.
-  Qed.
-
-  Lemma bv_eqb_eq {n} : forall (x y : bv n), (x =? y) = true <-> x = y.
-  Proof.
-    intuition; simplify.
-    - unfold bv_eqb in *. destruct (bv_eq_dec n x y); done.
-    - unfold bv_eqb. destruct (bv_eq_dec n y y); easy.
-  Qed.
-
-  Lemma bv_eqb_neq {n} : forall (x y : bv n), (x =? y) = false <-> x <> y.
-  Proof.
-    intuition; simplify.
-    - unfold bv_eqb in *. destruct (bv_eq_dec n y y); done.
-    - unfold bv_eqb. destruct (bv_eq_dec n x y); done.
-  Qed.
-
-  Lemma bv_not_zero_one : forall (x : bv 1), x <> 0 <-> x = 1.
-  Proof.
-    simplify.
-    assert (x = 0 \/ x = 1).
-    { apply bv_1_ind with (P := (fun x => x = 0 \/ x = 1)); equality. }
-    split; simplify.
-    - destruct_or!; done.
-    - destruct_or!; done.
-  Qed.
-
-  Lemma bv_not_one_zero : forall (x : bv 1), x <> 1 <-> x = 0.
-  Proof.
-    simplify.
-    assert (x = 0 \/ x = 1).
-    { apply bv_1_ind with (P := (fun x => x = 0 \/ x = 1)); equality. }
-    split; simplify.
-    - destruct_or!; done.
-    - destruct_or!; done.
+    - apply shift_and_add4_multiplies.
+    - bv_saturate_unsigned. unfold bv_modulus in *; simplify. nia.
   Qed.
 
   Definition busy (s : State) := s.(R).(r_busy) <> 0.
@@ -269,7 +218,7 @@ Section functional.
     unfold cycle in *. unfold busy in *.
     unfold valid in *. rewrite <- bv_eqb_neq in H.
     Search (_ <> false). apply not_false_is_true in H.
-    rewrite H0. rewrite H. simplify. done.
+    rewrite H0. rewrite H. simplify. equality.
   Qed.
 
   Definition cycle_idle_invalid s1 x s2 : Prop :=
@@ -281,15 +230,15 @@ Section functional.
   Proof.
     unfold cycle_idle_invalid. simplify.
     unfold cycle, busy, valid in *.
+    simplify_bv_eqb.
     rewrite <- bv_eqb_neq in H. apply not_false_is_true in H.
-    rewrite H. rewrite bv_not_one_zero in H0.
-    rewrite H0. simplify. done.
+    rewrite H. rewrite H0. simplify. equality.
   Qed.
 
   Definition cycle_busy_unfinished s1 x s2 : Prop :=
     busy s1 -> ~ finished s1 -> s2 = cycle s1 x ->
     s2 = s1 <| R; r_A := shift_and_add s1.(R).(r_B) s1.(R).(r_A) |>
-            <| R; r_cnt := s1.(R).(r_cnt) - 1 |>
+            <| R; r_cnt := bv_pred s1.(R).(r_cnt)|>
             <| T := s1.(T) ++ [{| leak_valid := x.(in_valid); leak_ready := 0 |}] |>
             <| Y := s1.(Y) ++ [Out0] |> .
 
@@ -297,9 +246,9 @@ Section functional.
   Proof.
     unfold cycle_busy_unfinished. simplify.
     unfold cycle, busy, finished in *.
-    rewrite bv_not_zero_one in H. rewrite H.
+    simplify_bv_eqb. rewrite H.
     simplify. rewrite <- bv_eqb_neq in H0. rewrite H0.
-    done.
+    equality.
   Qed.
 
   Definition cycle_busy_finished s1 x s2 : Prop :=
@@ -319,51 +268,40 @@ Section functional.
     unfold cycle_busy_finished. simplify.
     unfold cycle, busy, finished in *.
     rewrite H0. rewrite bv_not_zero_one in H.
-    rewrite H. simplify. done.
+    rewrite H. simplify. equality.
   Qed.
 
-  Ltac unroll_cycle_predicates :=
+  Tactic Notation "unfold*" :=
     unfold cycle_idle_valid, cycle_idle_invalid, cycle_busy_unfinished,
-      cycle_busy_finished, busy, finished, valid in *.
-
-  Ltac cycles_correct_auto :=
-    unroll_cycle_predicates; simplify;
-      solve
-        [ intuition
-        | bv_solve ].
-
-  Ltac unroll_nested_cycle :=
-    match goal with
-    | _ : context[cycle (cycle ?s ?x) _] |- _ =>
-        let s' := fresh "s" in
-        remember (cycle s x) as s'
-    | |- context[cycle ?s ?x] =>
-        let s' := fresh "s" in
-        remember (cycle s x) as s'
-    end.
-
-  Tactic Notation "unroll_nested_cycle!" := repeat progress unroll_nested_cycle.
+      cycle_busy_finished, cycles, busy, finished, shift_and_add4,
+      valid, repeat_shift_and_add, repeat, compose in *.
 
   (* Finally, with all those helper theorems out of the way, we can now prove
      the following correctness property:
 
      For any cycle where the circuit is idle, if a valid [a] and [b] are
      provided, four cycles later it will produce [a *| b]. *)
-  Theorem cycles_correct : forall s s' x1 x2 x3 x4 x5 a b,
-      ~ busy s -> x1 = {| in_A := a; in_B := b; in_valid := 1 |} ->
-      s' = cycles s [x1; x2; x3; x4; x5] ->
-      s'.(Y) = s.(Y) ++ [Out0; Out0; Out0; Out0; {| out_P := a *| b; out_ready := 1 |}].
+
+  Theorem cycles_correct: forall s1 x1 s2 x2 s3 x3 s4 x4 s5 x5 s6 a b,
+      ~ busy s1 -> x1 = {| in_A := a; in_B := b; in_valid := 1 |} ->
+      s2 = cycle s1 x1 ->
+      s3 = cycle s2 x2 ->
+      s4 = cycle s3 x3 ->
+      s5 = cycle s4 x4 ->
+      s6 = cycle s5 x5 ->
+      s6.(Y) = s1.(Y) ++ [Out0; Out0; Out0; Out0; {| out_P := a *| b; out_ready := 1 |}].
   Proof.
-    intros. simpl in H1. unroll_nested_cycle!. rewrite H0 in Heqs3.
-    apply cycle_idle_valid_holds      in Heqs3; try cycles_correct_auto.
-    apply cycle_busy_unfinished_holds in Heqs2; try cycles_correct_auto.
-    apply cycle_busy_unfinished_holds in Heqs1; try cycles_correct_auto.
-    apply cycle_busy_unfinished_holds in Heqs0; try cycles_correct_auto.
-    apply cycle_busy_finished_holds   in H1   ; try cycles_correct_auto.
-    simplify. repeat rewrite <- app_assoc. repeat progress f_equal.
-    apply shift_and_add4_correct.
-  Admitted.
-End functional.
+    intros. rewrite <- shift_and_add4_correct. unfold*. simpl in *.
+
+    1: apply cycle_idle_valid_holds      in H1.
+    1: apply cycle_busy_unfinished_holds in H2.
+    1: apply cycle_busy_unfinished_holds in H3.
+    1: apply cycle_busy_unfinished_holds in H4.
+    1: apply cycle_busy_finished_holds   in H5.
+
+    all: unfold*; simplify; solve [ eauto | bv_solve ].
+  Qed.
+End correctness.
 
 Section ct.
   Definition SLeakage := option (bv 4).
@@ -410,12 +348,6 @@ Section ct.
 
   Definition predict xs := predict' None xs.
 
-  Section ex.
-    Let xs := [mkIn 3 4 1; In0; In0; In0; In0; In0].
-
-    Compute (cycles State0 xs, predict (public xs)).
-  End ex.
-
   Definition rep (x : State) (y : PredictorState) : Prop :=
     (exists v, y = Some v /\
             bv_unsigned x.(R).(r_cnt) = (Z.of_nat v) /\
@@ -442,7 +374,7 @@ Section ct.
     simplify. inv H.
     - inv H0 as [v]. inv H. inv H1. inv H0. destruct v as [| v'].
       + assert (s1.(R).(r_cnt) = 0) by bv_solve.
-        right. rewrite H0. rewrite H2. done.
+        right. rewrite H0. rewrite H2. equality.
       + left. exists v'. intuition; try lia.
         * rewrite H2. simplify. pose proof H.
           apply bv_not_zero_nat_succ in H.
@@ -476,12 +408,10 @@ Section ct.
     induction xs as [| y ys IHy ]; simplify; try equality.
     - assert (rep (cycle s1 y) (predictor_step s2 (public1 y))).
       { apply simulation_step with (s1 := s1) (s2 := s2) (x := y); eauto. }
-      unfold cycles, predictor_steps. eapply IHy.
-      apply H0. equality. equality.
+      unfold cycles, predictor_steps. eapply IHy; eauto.
   Qed.
 
   Definition leak_next (s : State) (x : In) :=
-    let valid := x.(in_valid) in
     let ready :=
       if s.(R).(r_busy) =? 1
       then
@@ -490,7 +420,7 @@ Section ct.
         else 0
       else 0
     in
-    {| leak_valid := valid; leak_ready := ready |}.
+    {| leak_valid := x.(in_valid); leak_ready := ready |}.
 
   Lemma simulation_predict_leak : forall s1 s2 x,
       rep s1 s2 ->
@@ -546,15 +476,13 @@ Section ct.
       s3.(T) = s2.(T) ++ [leak_next s2 x].
   Proof.
     induction xs as [| z zs IHz ]; simplify.
-    - unfold cycle, leak_next. repeat case_match; try equality.
-      + rewrite bv_eqb_eq in H1. rewrite bv_eqb_eq in H.
-        rewrite H in H1. inv H1.
-      + rewrite bv_eqb_eq in H1. rewrite bv_eqb_eq in H.
-        rewrite H in H1. inv H1.
-      + rewrite bv_eqb_neq in H1. rewrite bv_eqb_neq in H.
-        apply bv_not_zero_one in H. contradiction.
+    - unfold cycle, leak_next.
+      destruct s1 as [R T Y]. destruct R as [a b count busy].
+      simplify. repeat case_match; simplify_bv_eqb; simplify; eauto.
+      all: try rewrite H0; eauto.
     - apply IHz with (s1 := (cycle s1 z)); equality.
   Qed.
+
 
   Lemma cycles_app : forall xs x,
       T (cycles State0 (xs ++ [x])) =
