@@ -16,12 +16,12 @@
 (*  hyperproperty. The statement of the property looks as follows (which we       *)
 (*  state as an equivalent single-copy trace property):                           *)
 (*                                                                                *)
-(*  There exists some predictor [f] such that given a cycle schedule [C],         *)
+(*  There exists some predictor [f] such that given a circuit_step schedule [C],         *)
 (*  starting from a reset state, the multiplier circuit [M] will produce an       *)
 (*  implementation leakage trace [t'].                                            *)
 (*                                                                                *)
 (*  A specification leakage trace [t] is extracted from schedule [C] which        *)
-(*  will record the values of [A] and [valid] each cycle. On termination,         *)
+(*  will record the values of [A] and [valid] each circuit_step. On termination,         *)
 (*                                                                                *)
 (*                              [t' = f t].                                       *)
 (*                                                                                *)
@@ -73,7 +73,7 @@ Section definitions.
     let t1 := if a? then 5#b else 0 in
     t0 + t1 || bv_extract 1 3 a.
 
-  Definition cycle (s : State) (x : I) : State :=
+  Definition circuit_step (s : State) (x : I) : State :=
     if s.(R).(r_busy) =? 0
     then
       if x.(in_valid) =? 1
@@ -110,7 +110,7 @@ Section definitions.
         let y' := s.(Y) ++ [O0] in
         {| R := r'; T := t'; Y := y' |}.
 
-  Definition cycles s xs := fold_left cycle xs s.
+  Definition circuit_steps s xs := fold_left circuit_step xs s.
 End definitions.
 
 Section correctness.
@@ -208,52 +208,52 @@ Section correctness.
   Definition finished (s : State) := s.(R).(r_cnt) = 0.
   Definition valid (x : I) := x.(in_valid) = 1.
 
-  Definition cycle_idle_valid s1 x s2 : Prop :=
-    ~ busy s1 -> valid x -> s2 = cycle s1 x ->
+  Definition circuit_step_idle_valid s1 x s2 : Prop :=
+    ~ busy s1 -> valid x -> s2 = circuit_step s1 x ->
     s2 = s1 <| R := {| r_A := 8#x.(in_A); r_B := x.(in_B); r_cnt := 3; r_busy := 1 |} |>
             <| T := s1.(T) ++ [{| leak_valid := 1; leak_ready := 0 |}] |>
             <| Y := s1.(Y) ++ [O0] |>.
 
-  Lemma cycle_idle_valid_holds : forall s1 x s2, cycle_idle_valid s1 x s2.
+  Lemma circuit_step_idle_valid_holds : forall s1 x s2, circuit_step_idle_valid s1 x s2.
   Proof.
-    unfold cycle_idle_valid. simplify.
-    unfold cycle in *. unfold busy in *.
+    unfold circuit_step_idle_valid. simplify.
+    unfold circuit_step in *. unfold busy in *.
     unfold valid in *. rewrite <- bv_eqb_neq in H.
     simplify!. rewrite H0. rewrite H.
     simplify. equality.
   Qed.
 
-  Definition cycle_idle_invalid s1 x s2 : Prop :=
-    ~ busy s1 -> ~ valid x -> s2 = cycle s1 x ->
+  Definition circuit_step_idle_invalid s1 x s2 : Prop :=
+    ~ busy s1 -> ~ valid x -> s2 = circuit_step s1 x ->
     s2 = s1 <| T := s1.(T) ++ [{| leak_valid := 0; leak_ready := 0 |}] |>
             <| Y := s1.(Y) ++ [O0] |>.
 
-  Lemma cycle_idle_invalid_holds : forall s1 x s2, cycle_idle_invalid s1 x s2.
+  Lemma circuit_step_idle_invalid_holds : forall s1 x s2, circuit_step_idle_invalid s1 x s2.
   Proof.
-    unfold cycle_idle_invalid. simplify.
-    unfold cycle, busy, valid in *.
+    unfold circuit_step_idle_invalid. simplify.
+    unfold circuit_step, busy, valid in *.
     simplify!. rewrite H. rewrite H0.
     simplify. equality.
   Qed.
 
-  Definition cycle_busy_unfinished s1 x s2 : Prop :=
-    busy s1 -> ~ finished s1 -> s2 = cycle s1 x ->
+  Definition circuit_step_busy_unfinished s1 x s2 : Prop :=
+    busy s1 -> ~ finished s1 -> s2 = circuit_step s1 x ->
     s2 = s1 <| R; r_A := shift_and_add s1.(R).(r_B) s1.(R).(r_A) |>
             <| R; r_cnt := bv_pred s1.(R).(r_cnt)|>
             <| T := s1.(T) ++ [{| leak_valid := x.(in_valid); leak_ready := 0 |}] |>
             <| Y := s1.(Y) ++ [O0] |> .
 
-  Lemma cycle_busy_unfinished_holds : forall s1 x s2, cycle_busy_unfinished s1 x s2.
+  Lemma circuit_step_busy_unfinished_holds : forall s1 x s2, circuit_step_busy_unfinished s1 x s2.
   Proof.
-    unfold cycle_busy_unfinished. simplify.
-    unfold cycle, busy, finished in *.
+    unfold circuit_step_busy_unfinished. simplify.
+    unfold circuit_step, busy, finished in *.
     simplify!. rewrite H.
     simplify. rewrite <- bv_eqb_neq in H0. rewrite H0.
     equality.
   Qed.
 
-  Definition cycle_busy_finished s1 x s2 : Prop :=
-    busy s1 -> finished s1 -> s2 = cycle s1 x ->
+  Definition circuit_step_busy_finished s1 x s2 : Prop :=
+    busy s1 -> finished s1 -> s2 = circuit_step s1 x ->
     s2 = s1 <| R; r_A := shift_and_add s1.(R).(r_B) s1.(R).(r_A) |>
             <| R; r_cnt := 0 |>
             <| R; r_busy := 0 |>
@@ -264,42 +264,42 @@ Section correctness.
                            |}]
               |>.
 
-  Lemma cycle_busy_finished_holds : forall s1 x s2, cycle_busy_finished s1 x s2.
+  Lemma circuit_step_busy_finished_holds : forall s1 x s2, circuit_step_busy_finished s1 x s2.
   Proof.
-    unfold cycle_busy_finished. simplify.
-    unfold cycle, busy, finished in *.
+    unfold circuit_step_busy_finished. simplify.
+    unfold circuit_step, busy, finished in *.
     rewrite H0. simplify!. rewrite H.
     simplify. equality.
   Qed.
 
   Tactic Notation "unfold*" :=
-    unfold cycle_idle_valid, cycle_idle_invalid, cycle_busy_unfinished,
-      cycle_busy_finished, cycles, busy, finished, shift_and_add4,
+    unfold circuit_step_idle_valid, circuit_step_idle_invalid, circuit_step_busy_unfinished,
+      circuit_step_busy_finished, circuit_steps, busy, finished, shift_and_add4,
       valid, repeat_shift_and_add, repeat, compose in *.
 
   (* Finally, with all those helper theorems out of the way, we can now prove
      the following correctness property:
 
-     For any cycle where the circuit is idle, if a valid [a] and [b] are
-     provided, four cycles later it will produce [a *| b]. *)
+     For any circuit_step where the circuit is idle, if a valid [a] and [b] are
+     provided, four circuit_steps later it will produce [a *| b]. *)
 
-  Theorem cycles_correct: forall s1 x1 s2 x2 s3 x3 s4 x4 s5 x5 s6 a b,
+  Theorem circuit_steps_correct: forall s1 x1 s2 x2 s3 x3 s4 x4 s5 x5 s6 a b,
       ~ busy s1 ->
       x1 = {| in_A := a; in_B := b; in_valid := 1 |} ->
-      s2 = cycle s1 x1 ->
-      s3 = cycle s2 x2 ->
-      s4 = cycle s3 x3 ->
-      s5 = cycle s4 x4 ->
-      s6 = cycle s5 x5 ->
+      s2 = circuit_step s1 x1 ->
+      s3 = circuit_step s2 x2 ->
+      s4 = circuit_step s3 x3 ->
+      s5 = circuit_step s4 x4 ->
+      s6 = circuit_step s5 x5 ->
       s6.(Y) = s1.(Y) ++ [O0; O0; O0; O0; {| out_P := a *| b; out_ready := 1 |}].
   Proof.
     intros. rewrite <- shift_and_add4_correct. unfold*. simpl in *.
 
-    1: apply cycle_idle_valid_holds      in H1.
-    1: apply cycle_busy_unfinished_holds in H2.
-    1: apply cycle_busy_unfinished_holds in H3.
-    1: apply cycle_busy_unfinished_holds in H4.
-    1: apply cycle_busy_finished_holds   in H5.
+    1: apply circuit_step_idle_valid_holds      in H1.
+    1: apply circuit_step_busy_unfinished_holds in H2.
+    1: apply circuit_step_busy_unfinished_holds in H3.
+    1: apply circuit_step_busy_unfinished_holds in H4.
+    1: apply circuit_step_busy_finished_holds   in H5.
 
     all: unfold*; simplify; solve [ eauto | bv_solve ].
   Qed.
@@ -360,11 +360,11 @@ Section ct.
 
   Lemma simulation_step : forall s1 s2 s1' s2' x,
       rep s1 s2 ->
-      s1' = cycle s1 x ->
+      s1' = circuit_step s1 x ->
       s2' = predictor_step s2 (public1 x) ->
       rep s1' s2'.
   Proof.
-    unfold rep, cycle, predictor_step, public1.
+    unfold rep, circuit_step, predictor_step, public1.
     simplify. inv H.
     - inv H0 as [v]. inv H. inv H1. inv H0. destruct v as [| v'].
       + assert (s1.(R).(r_cnt) = 0) by bv_solve.
@@ -395,14 +395,14 @@ Section ct.
 
   Lemma simulation_many_step : forall xs s1 s2 s1' s2',
     rep s1 s2 ->
-    s1' = cycles s1 xs ->
+    s1' = circuit_steps s1 xs ->
     s2' = predictor_steps s2 (public xs) ->
     rep s1' s2'.
   Proof.
     induction xs as [| y ys IHy ]; simplify; try equality.
-    - assert (rep (cycle s1 y) (predictor_step s2 (public1 y))).
+    - assert (rep (circuit_step s1 y) (predictor_step s2 (public1 y))).
       { apply simulation_step with (s1 := s1) (s2 := s2) (x := y); eauto. }
-      unfold cycles, predictor_steps. eapply IHy; eauto.
+      unfold circuit_steps, predictor_steps. eapply IHy; eauto.
   Qed.
 
   Definition leak_next (s : State) (x : I) :=
@@ -464,34 +464,34 @@ Section ct.
     simplify. apply predict_app'; equality.
   Qed.
 
-  Lemma cycles_app' : forall xs x s1 s2 s3,
-      s2 = cycles s1 xs ->
-      s3 = cycles s1 (xs ++ [x]) ->
+  Lemma circuit_steps_app' : forall xs x s1 s2 s3,
+      s2 = circuit_steps s1 xs ->
+      s3 = circuit_steps s1 (xs ++ [x]) ->
       s3.(T) = s2.(T) ++ [leak_next s2 x].
   Proof.
     induction xs as [| z zs IHz ]; simplify.
-    - unfold cycle, leak_next.
+    - unfold circuit_step, leak_next.
       destruct s1 as [R T Y]. destruct R as [a b count busy].
       simplify. repeat case_match; simplify!; eauto.
       all: try rewrite H0; eauto.
-    - apply IHz with (s1 := (cycle s1 z)); equality.
+    - apply IHz with (s1 := (circuit_step s1 z)); equality.
   Qed.
 
 
-  Lemma cycles_app : forall xs x,
-      T (cycles State0 (xs ++ [x])) =
-        T (cycles State0 xs) ++ [leak_next (cycles State0 xs) x].
+  Lemma circuit_steps_app : forall xs x,
+      T (circuit_steps State0 (xs ++ [x])) =
+        T (circuit_steps State0 xs) ++ [leak_next (circuit_steps State0 xs) x].
   Proof.
-    simplify. apply cycles_app' with (xs := xs) (s1 := State0); equality.
+    simplify. apply circuit_steps_app' with (xs := xs) (s1 := State0); equality.
   Qed.
 
-  Theorem cycles_ct : exists f, forall xs s,
-      s = cycles State0 xs -> s.(T) = f (public xs).
+  Theorem circuit_ct : exists f, forall xs s,
+      s = circuit_steps State0 xs -> s.(T) = f (public xs).
   Proof.
     exists predict.
     induction xs as [| z zs IHz ] using rev_ind; simplify.
     - equality.
-    - rewrite cycles_app. unfold public. rewrite map_app.
+    - rewrite circuit_steps_app. unfold public. rewrite map_app.
       simplify. rewrite predict_app. rewrite IHz by equality.
       unfold public. repeat f_equal. apply simulation_predict_leak.
       apply simulation_many_step with (xs := zs) (s1 := State0) (s2 := None).
