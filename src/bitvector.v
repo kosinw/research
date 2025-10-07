@@ -83,3 +83,5 @@ Ltac simplify_bv_eqb :=
       | H: ?x <> 1 |- _ => rewrite bv_not_one_zero in H
       end
     ).
+
+Tactic Notation "simplify!" := simplify_bv_eqb; simplify.

@@ -16,3 +16,4 @@ From RecordUpdate Require Export RecordUpdate.
 
 Ltac simplify := repeat progress (intros; simpl in *; list_simplifier; subst).
 Ltac equality := intuition congruence.
+Ltac propositional := intuition.

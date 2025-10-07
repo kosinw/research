@@ -39,40 +39,41 @@ Section definitions.
     ; r_busy : bv 1
     }.
 
-  Record In :=
-   { in_A : bv 4
-   ; in_B : bv 4
-   ; in_valid : bv 1
-   }.
+  Record I :=
+    { in_A : bv 4
+    ; in_B : bv 4
+    ; in_valid : bv 1
+    }.
 
-  Record Out :=
+  Record O :=
     { out_P : bv 8
-    ; out_ready : bv 1 }.
+    ; out_ready : bv 1
+    }.
 
-  Definition Out0 := {| out_P := 0; out_ready := 0 |}.
+  Definition O0 := {| out_P := 0; out_ready := 0 |}.
 
   Record ILeakage :=
     { leak_valid : bv 1
-    ; leak_ready : bv 1 }.
+    ; leak_ready : bv 1
+    }.
 
   Record State :=
-    { R : Registers;
-      T : list ILeakage;
-      Y : list Out }.
+    { R : Registers
+    ; T : list ILeakage
+    ; Y : list O
+    }.
 
   Definition State0 :=
     {| R := {| r_A := 0; r_B := 0; r_cnt := 0; r_busy := 0 |}
     ; T := []
     ; Y := [] |}.
 
-  (* One shift-and-add step: conditionally add `b` into the high half of `a` then
-   shift-right by one by reassembly. *)
   Definition shift_and_add (b : bv 4) (a : bv 8) : bv 8 :=
     let t0 := bv_extract 4 5 a in
     let t1 := if a? then 5#b else 0 in
     t0 + t1 || bv_extract 1 3 a.
 
-  Definition cycle (s : State) (x : In) : State :=
+  Definition cycle (s : State) (x : I) : State :=
     if s.(R).(r_busy) =? 0
     then
       if x.(in_valid) =? 1
@@ -83,12 +84,12 @@ Section definitions.
         let rbusy' := 1 in
         let r' := {| r_A := ra'; r_B := rb'; r_cnt := rcount'; r_busy := rbusy' |} in
         let t' := s.(T) ++ [{| leak_valid := 1; leak_ready := 0 |}] in
-        let y' := s.(Y) ++ [Out0] in
+        let y' := s.(Y) ++ [O0] in
         {| R := r'; T := t'; Y := y' |}
       else
         let t' := s.(T) ++ [{| leak_valid := 0; leak_ready := 0 |}] in
         let r' := s.(R) in
-        let y' := s.(Y) ++ [Out0] in
+        let y' := s.(Y) ++ [O0] in
         {| R := r'; T := t'; Y := y' |}
     else
       let ra' := shift_and_add s.(R).(r_B) s.(R).(r_A) in
@@ -106,7 +107,7 @@ Section definitions.
         let rbusy' := 1 in
         let r' := {| r_A := ra'; r_B := rb'; r_cnt := rcount'; r_busy := rbusy' |} in
         let t' := s.(T) ++ [{| leak_valid := x.(in_valid); leak_ready := 0 |}] in
-        let y' := s.(Y) ++ [Out0] in
+        let y' := s.(Y) ++ [O0] in
         {| R := r'; T := t'; Y := y' |}.
 
   Definition cycles s xs := fold_left cycle xs s.
@@ -115,7 +116,7 @@ End definitions.
 Section correctness.
   Fixpoint repeat {A : Type} (f : A -> A) (n : nat) {struct n} : (A -> A) :=
     match n with
-    | O => id
+    | 0%nat => id
     | S n' => f ∘ repeat f n'
     end.
 
@@ -175,7 +176,9 @@ Section correctness.
       (0 <= b < bv_modulus 4%N)%Z ->
       shift_and_add4' b a = (a * b)%Z.
   Proof.
-    intros a b Ha Hb. replace (bv_modulus 4%N) with 16%Z in * by easy. by_cases16.
+    intros a b Ha Hb.
+    replace (bv_modulus 4%N) with 16%Z in * by reflexivity.
+    by_cases16.
   Qed.
 
   Lemma shift_and_add4_multiplies : forall (a b : bv 4),
@@ -203,33 +206,33 @@ Section correctness.
 
   Definition busy (s : State) := s.(R).(r_busy) = 1.
   Definition finished (s : State) := s.(R).(r_cnt) = 0.
-  Definition valid (x : In) := x.(in_valid) = 1.
+  Definition valid (x : I) := x.(in_valid) = 1.
 
   Definition cycle_idle_valid s1 x s2 : Prop :=
     ~ busy s1 -> valid x -> s2 = cycle s1 x ->
     s2 = s1 <| R := {| r_A := 8#x.(in_A); r_B := x.(in_B); r_cnt := 3; r_busy := 1 |} |>
             <| T := s1.(T) ++ [{| leak_valid := 1; leak_ready := 0 |}] |>
-            <| Y := s1.(Y) ++ [Out0] |>.
+            <| Y := s1.(Y) ++ [O0] |>.
 
   Lemma cycle_idle_valid_holds : forall s1 x s2, cycle_idle_valid s1 x s2.
   Proof.
     unfold cycle_idle_valid. simplify.
     unfold cycle in *. unfold busy in *.
     unfold valid in *. rewrite <- bv_eqb_neq in H.
-    simplify_bv_eqb. rewrite H0. rewrite H.
+    simplify!. rewrite H0. rewrite H.
     simplify. equality.
   Qed.
 
   Definition cycle_idle_invalid s1 x s2 : Prop :=
     ~ busy s1 -> ~ valid x -> s2 = cycle s1 x ->
     s2 = s1 <| T := s1.(T) ++ [{| leak_valid := 0; leak_ready := 0 |}] |>
-            <| Y := s1.(Y) ++ [Out0] |>.
+            <| Y := s1.(Y) ++ [O0] |>.
 
   Lemma cycle_idle_invalid_holds : forall s1 x s2, cycle_idle_invalid s1 x s2.
   Proof.
     unfold cycle_idle_invalid. simplify.
     unfold cycle, busy, valid in *.
-    simplify_bv_eqb. rewrite H. rewrite H0.
+    simplify!. rewrite H. rewrite H0.
     simplify. equality.
   Qed.
 
@@ -238,13 +241,13 @@ Section correctness.
     s2 = s1 <| R; r_A := shift_and_add s1.(R).(r_B) s1.(R).(r_A) |>
             <| R; r_cnt := bv_pred s1.(R).(r_cnt)|>
             <| T := s1.(T) ++ [{| leak_valid := x.(in_valid); leak_ready := 0 |}] |>
-            <| Y := s1.(Y) ++ [Out0] |> .
+            <| Y := s1.(Y) ++ [O0] |> .
 
   Lemma cycle_busy_unfinished_holds : forall s1 x s2, cycle_busy_unfinished s1 x s2.
   Proof.
     unfold cycle_busy_unfinished. simplify.
     unfold cycle, busy, finished in *.
-    simplify_bv_eqb. rewrite H.
+    simplify!. rewrite H.
     simplify. rewrite <- bv_eqb_neq in H0. rewrite H0.
     equality.
   Qed.
@@ -265,7 +268,7 @@ Section correctness.
   Proof.
     unfold cycle_busy_finished. simplify.
     unfold cycle, busy, finished in *.
-    rewrite H0. simplify_bv_eqb. rewrite H.
+    rewrite H0. simplify!. rewrite H.
     simplify. equality.
   Qed.
 
@@ -288,7 +291,7 @@ Section correctness.
       s4 = cycle s3 x3 ->
       s5 = cycle s4 x4 ->
       s6 = cycle s5 x5 ->
-      s6.(Y) = s1.(Y) ++ [Out0; Out0; Out0; Out0; {| out_P := a *| b; out_ready := 1 |}].
+      s6.(Y) = s1.(Y) ++ [O0; O0; O0; O0; {| out_P := a *| b; out_ready := 1 |}].
   Proof.
     intros. rewrite <- shift_and_add4_correct. unfold*. simpl in *.
 
@@ -314,7 +317,7 @@ Section ct.
   Definition predictor_step (st : PredictorState) (s : SLeakage) :=
     match st with
     | Some (S n) => Some n
-    | Some O => None
+    | Some 0%nat => None
     | None =>
         match s with
         | Some _ => Some 3%nat
@@ -327,7 +330,7 @@ Section ct.
 
   Definition predict_next (st : PredictorState) (s : SLeakage) :=
     match st with
-    | Some O =>
+    | Some 0%nat =>
         match s with
         | Some _ => {| leak_valid := 1; leak_ready := 1 |}
         | None => {| leak_valid := 0; leak_ready := 1 |}
@@ -402,7 +405,7 @@ Section ct.
       unfold cycles, predictor_steps. eapply IHy; eauto.
   Qed.
 
-  Definition leak_next (s : State) (x : In) :=
+  Definition leak_next (s : State) (x : I) :=
     let ready :=
       if s.(R).(r_busy) =? 1
       then
@@ -469,7 +472,7 @@ Section ct.
     induction xs as [| z zs IHz ]; simplify.
     - unfold cycle, leak_next.
       destruct s1 as [R T Y]. destruct R as [a b count busy].
-      simplify. repeat case_match; simplify_bv_eqb; simplify; eauto.
+      simplify. repeat case_match; simplify!; eauto.
       all: try rewrite H0; eauto.
     - apply IHz with (s1 := (cycle s1 z)); equality.
   Qed.
