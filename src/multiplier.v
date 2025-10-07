@@ -306,9 +306,9 @@ Section correctness.
 End correctness.
 
 Section ct.
-  Definition SLeakage := option (bv 4).
+  Definition SLeakage := option unit.
 
-  Definition public1 x := if x.(in_valid) =? 1 then Some x.(in_A) else None.
+  Definition public1 x := if x.(in_valid) =? 1 then Some tt else None.
 
   Definition public := map public1.
 
