@@ -45,8 +45,6 @@ Section circuit.
 
   Definition O := option _O.
 
-  Definition O0 : O := None.
-
   Record ILeakage :=
     { leak_valid : bool
     ; leak_ready : bool
@@ -109,11 +107,6 @@ Section circuit.
     end.
 
   Definition circuit_steps s xs := fold_left circuit_step xs s.
-
-  Compute (
-      circuit_steps State0
-        [Some {| in_a := 14; in_b := 14 |}; None; None; None; None; None]
-    ).
 End circuit.
 
 Section ct.
