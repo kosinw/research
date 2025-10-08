@@ -251,11 +251,9 @@ Section ct.
     induction xs as [| z zs IHz ]; simplify.
     - unfold circuit_step, leak_next.
       destruct s1 as [R T Y]. destruct R as [a b count busy].
-      simplify. repeat case_match; simplify_bv_eqb; simplify; eauto.
-      all: try rewrite H0; eauto.
+      simplify. repeat case_match; simplify!; eauto.
     - apply IHz with (s1 := (circuit_step s1 z)); equality.
   Qed.
-
 
   Lemma circuit_steps_app : forall xs x,
       T (circuit_steps State0 (xs ++ [x])) =

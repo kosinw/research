@@ -19,9 +19,7 @@ Local Open Scope bv_scope.
    `mod` and `div`. *)
 Ltac Zify.zify_post_hook ::= Z.div_mod_to_equations.
 
-Definition bv_eqb {n} (x y : bv n) : bool :=
-  Eval cbv delta [ bool_decide decide_rel ] in
-    bool_decide (x = y).
+Definition bv_eqb {n} (x y : bv n) : bool := bool_decide (x = y).
 
 Definition bv_odd {n} (x : bv n) := Z.odd (bv_unsigned x).
 
@@ -32,16 +30,16 @@ Notation "x ?" := (bv_odd x) : bv_scope.
 
 Lemma bv_eqb_eq {n} : forall (x y : bv n), (x =? y) = true <-> x = y.
 Proof.
-  intuition; simplify.
-  - unfold bv_eqb in *. destruct (bv_eq_dec n x y); equality.
-  - unfold bv_eqb. destruct (bv_eq_dec n y y); equality.
+  unfold bv_eqb. propositional; simplify.
+  - rewrite <- bool_decide_eq_true. eauto.
+  - rewrite bool_decide_eq_true. eauto.
 Qed.
 
 Lemma bv_eqb_neq {n} : forall (x y : bv n), (x =? y) = false <-> x <> y.
 Proof.
-  intuition; simplify.
-  - unfold bv_eqb in *. destruct (bv_eq_dec n y y); equality.
-  - unfold bv_eqb. destruct (bv_eq_dec n x y); equality.
+  unfold bv_eqb. propositional; simplify.
+  - rewrite bool_decide_eq_false in H. eauto.
+  - rewrite bool_decide_eq_false. eauto.
 Qed.
 
 Lemma bv_not_zero_one : forall (x : bv 1), x <> 0 <-> x = 1.
