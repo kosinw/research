@@ -241,7 +241,7 @@ Qed.
 
 Local Hint Resolve invariant_start : core.
 
-Corollary simulates_ok : policy ⊢ Impl.circuit ⊑ Spec.circuit.
+Corollary simulates_ok : policy ⊢ Impl.circuit ∼ Spec.circuit.
 Proof.
   unfold simulates in *; exists invariant; t.
 Qed.
