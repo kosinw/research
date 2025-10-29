@@ -1,0 +1,83 @@
+From research Require Import base.
+From research Require Export action.
+
+Class Circuit (t m tr : Type) :=
+  { circuitInit : t
+  ; circuitResult : m -> Type
+  ; circuitCall : forall (method : m), @Action t (circuitResult method)
+  ; circuitTrace : t -> list tr
+  }.
+
+Definition circuitStep `{c : Circuit t m tr} (method : m) (state : t) : t :=
+  @runAction2 t (circuitResult method) (circuitCall method) state.
+
+Definition circuitSteps `{c : Circuit t m tr} (ms : list m) (state : t) : t :=
+  fold_left (fun st m => circuitStep m st) ms state.
+
+Definition runCircuit `{c : Circuit t m tr} (ms : list m) : t :=
+  circuitSteps ms circuitInit.
+
+Lemma circuitStepsApp `{c: Circuit t m tr} : forall xs1 xs2 st,
+    circuitSteps (xs1 ++ xs2) st =
+      circuitSteps xs2 (circuitSteps xs1 st).
+Proof.
+  cbv [circuitSteps].
+  intros ???.
+  rewrite fold_left_app.
+  equality.
+Qed.
+
+Lemma runCircuitApp `{c: Circuit t m tr} : forall xs1 xs2,
+    runCircuit (xs1 ++ xs2) =
+      circuitSteps xs2 (runCircuit xs1).
+Proof.
+  cbv [runCircuit].
+  intros ??.
+  apply circuitStepsApp.
+Qed.
+
+Definition simulates
+  `(c1: Circuit t1 m1 tr)
+  `(c2: Circuit t2 m2 tr)
+  policy
+  (R : t1 -> t2 -> Prop) :=
+  forall s1 s2,
+    R s1 s2 ->
+    (forall m s1' s2',
+        s1' = circuitStep m s1 ->
+        s2' = circuitStep (policy m) s2 ->
+        R s1' s2').
+
+Notation "c1 ∼ c2 : policy ; R" := (simulates c1 c2 policy R) (at level 60, c2 at next level).
+
+(* We say a circuit [c] is constant time relevant to some policy [policy],
+   if given the set of method calls to [c], we get the specification leakage
+   by applying policy [policy] to the series of method calls. If from the specification
+   leakage we can determine the implementation leakage trace, we get constant time
+   wrt [policy]. *)
+Definition constantTime {m2} `(c : Circuit t m1 tr) (policy : list m1 -> list m2) :=
+  exists f, forall xs, circuitTrace (runCircuit xs) = f (policy xs).
+
+Lemma simulationConstantTime `(c1 : Circuit t1 m1 tr) `(c2 : Circuit t2 m2 tr) policy :
+  forall R, (c1 ∼ c2 : policy; R) ->
+       R c1.(circuitInit) c2.(circuitInit) ->
+       (forall t1 t2, R t1 t2 -> c1.(circuitTrace) t1 = c2.(circuitTrace) t2) ->
+       constantTime c1 (map policy).
+Proof.
+  intros R Hsimulates Hinit Htrace.
+  cbv [ constantTime simulates ] in *.
+  exists (fun zs => circuitTrace (runCircuit zs)).
+  intros.
+  apply Htrace.
+  induction xs using rev_ind.
+  - assumption.
+  - rewrite map_app.
+    rewrite !runCircuitApp.
+    simplify.
+    apply Hsimulates with
+      (s1 := runCircuit xs)
+      (s2 := runCircuit (map policy xs))
+      (m := x); equality.
+Qed.
+
+Arguments Circuit {_ _ _}.

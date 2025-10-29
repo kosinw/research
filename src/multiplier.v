@@ -1,33 +1,40 @@
-From research Require Import base bit program simulates.
+From research Require Import base bit circuit.
 
 Notation Maybe := @option.
 
-Inductive spec := | Spec__Enq (a : Bit 4) | Spec__Deq | Spec__Tick.
-Inductive impl := | Impl__Enq | Impl__Deq | Impl__Tick.
-Inductive method := | Method__Enq (a b : Bit 4) | Method__Deq | Method__Tick.
-Inductive state := State__Empty | State__Busy | State__Full.
+Inductive specLeakage :=
+| SpecLeakage__Enq (a : Bit 4)
+| SpecLeakage__Deq
+| SpecLeakage__Rule.
+
+Inductive implLeakage :=
+| ImplLeakage__Enq
+| ImplLeakage__Deq
+| ImplLeakage__Rule.
+
+Inductive method :=
+| Enq (a b : Bit 4)
+| Deq
+| Rule.
+
+Inductive state :=
+| State__Empty
+| State__Busy
+| State__Full.
+
 Instance state__EqDecision : EqDecision state. solve_decision. Defined.
 
-Definition policy m :=
-  match m with
-  | Method__Enq a b => Spec__Enq a
-  | Method__Deq => Spec__Deq
-  | Method__Tick => Spec__Tick
-  end.
-
-Module Impl.
-  Record t_inner :=
+Module Multiplier.
+  Record t :=
     { a : Bit 4
     ; b : Bit 4
     ; c : Bit 2
     ; p : Bit 8
     ; st : state
-    ; trace : list impl
+    ; trace : list implLeakage
     }.
 
-  Definition t := t_inner.
-
-  Definition mk : t :=
+  Definition mk :=
     {| a := 0%bv
     ; b := 0%bv
     ; c := 0%bv
@@ -36,233 +43,173 @@ Module Impl.
     ; trace := []
     |}.
 
-  Definition enq in1 in2 :=
-    {{ st' <- $st ;;
-       when (decide (st' = State__Empty)) then
-         trace ↩ Impl__Enq ;;
-         a <=: in1 ;;
-         b <=: in2 ;;
-         c <=: 0%bv ;;
-         p <=: 0%bv ;;
-         st <=: State__Busy
+  Definition enq in__a in__b :=
+    {{ let%read st0 := st in
+       guard decide (st0 = State__Empty) then
+         let%modify trace := snoc ImplLeakage__Enq in
+         let%write a      := in__a in
+         let%write b      := in__b in
+         let%write c      := 0%bv in
+         let%write p      := 0%bv in
+         let%write st     := State__Busy in
+         pass
     }}.
 
   Definition deq :=
-    {{ st' <- $st ;;
-       if (decide (st' = State__Full)) then
-         trace ↩ Impl__Deq ;;
-         st <=: State__Empty ;;
-         p' <- $p ;;
-         ret (Valid p')
+    {{ let%read st0 := st in
+       let%read p0  := p  in
+       if decide (st0 = State__Full) then
+         let%modify trace := snoc ImplLeakage__Deq in
+         let%write  st    := State__Empty          in
+         ret (Valid p0)
        else
          ret Invalid
     }}.
 
-  Definition shift_and_add :=
-    {{ a' <- $a ;;
-       b' <- $b ;;
-       c' <- $c ;;
-       p' <- $p ;;
-       when decide (a' <> 0%bv) then
+  Definition shiftAndAdd :=
+    {{ let%read a0 := a in
+       let%read b0 := b in
+       let%read c0 := c in
+       let%read p0 := p in
+       guard decide (a0 <> 0%bv) then
          let t :=
-           if decide ((truncate a' : Bit 1) = 1)%bv then
-             (zeroExtend b' : Bit 8)%bv
+           if decide (truncate (z := 1) a0 = 1)%bv then
+             zeroExtend (z := 8) b0
            else
              0%bv
          in
-         p <=: (p' + (t ≪ (zeroExtend c' : Bit 8)))%bv ;;
-         a <=: (a' ≫ 1)%bv ;;
-         c <=: (c' + 1)%bv
+         let%write p := (p0 + (t ≪ zeroExtend (z := 8) c0))%bv in
+         let%write a := (a0 ≫ 1)%bv in
+         let%write c := (c0 + 1)%bv in
+         pass
     }}.
 
-  Definition tick :=
-    {{ st' <- $st ;;
-       when (decide (st' = State__Busy)) then
-         trace ↩ Impl__Tick ;;
-         a' <- $a ;;
-         if (decide (a' = 0%bv)) then
-           st <=: State__Full
+  Definition rule :=
+    {{ let%read st0 := st in
+       let%read a0  := a  in
+       guard decide (st0 = State__Busy) then
+         let%modify trace := snoc ImplLeakage__Rule in
+         if decide (a0 = 0%bv) then
+           let%write st := State__Full in
+           pass
          else
-           shift_and_add
+           shiftAndAdd
     }}.
 
-  Definition methodResult m :=
-    match m with
-    | Method__Enq _ _ => unit
-    | Method__Deq => Maybe (Bit 8)
-    | Method__Tick => unit
-    end.
+  Instance circuit : Circuit :=
+    {| circuitInit := mk
+    ; circuitResult m := match m with Enq _ _ => unit | Deq => Maybe (Bit 8) | Rule => unit end
+    ; circuitCall m := match m with Enq a b => enq a b | Deq => deq | Rule => rule end
+    ; circuitTrace := trace
+    |}.
+End Multiplier.
 
-  Definition runMethod m : ActionValue (methodResult m) :=
-    match m with
-    | Method__Enq a b => enq a b
-    | Method__Deq => deq
-    | Method__Tick => tick
-    end.
-
-  Definition runMethod1 m := runAction1 (runMethod m).
-  Definition runMethods xs := fold_left (fun a b => runMethod1 b a) xs.
-
-  Definition circuit : Circuit t method := {| init := mk; run := runMethod1 |}.
-End Impl.
-
-Module Spec.
-  Record t_inner :=
+Module MultiplierSpec.
+  Record t :=
     { st : state
     ; a : Bit 4
-    ; trace : list impl
+    ; trace : list implLeakage
     }.
 
-  Definition t := t_inner.
+  Definition mk := {| st := State__Empty; a := 0%bv; trace := [] |}.
 
-  Definition mk : t :=
-    {| st := State__Empty
-    ; a := 0%bv
-    ; trace := []
-    |}.
-
-  Definition enq in1 :=
-    {{ st' <- $st ;;
-       when (decide (st' = State__Empty)) then
-         trace ↩ Impl__Enq ;;
-         a <=: in1 ;;
-         st <=: State__Busy
+  Definition enq in__a :=
+    {{ let%read st0 := st in
+       guard decide (st0 = State__Empty) then
+         let%modify trace := snoc ImplLeakage__Enq in
+         let%write a := in__a in
+         let%write st := State__Busy in
+         pass
     }}.
 
   Definition deq :=
-    {{ st' <- $st ;;
-       when (decide (st' = State__Full)) then
-         trace ↩ Impl__Deq ;;
-         st <=: State__Empty
+    {{ let%read st0 := st in
+       guard decide (st0 = State__Full) then
+         let%modify trace := snoc ImplLeakage__Deq in
+         let%write st := State__Empty in
+         pass
     }}.
 
   Definition shift :=
-    {{ a' <- $a ;;
-       when decide (a' <> 0%bv) then
-         a <=: (a' ≫ 1)%bv
+    {{ let%read a0 := a in
+       guard decide (a0 <> 0%bv) then
+         let%write a := (a0 ≫ 1)%bv in
+         pass
     }}.
 
-  Definition tick :=
-    {{ st' <- $st ;;
-       when (decide (st' = State__Busy)) then
-         trace ↩ Impl__Tick ;;
-         a' <- $a ;;
-         if (decide (a' = 0%bv)) then
-           st <=: State__Full
+  Definition rule :=
+    {{ let%read st0 := st in
+       let%read a0 := a in
+       guard decide (st0 = State__Busy) then
+         let%modify trace := snoc ImplLeakage__Rule in
+         if decide (a0 = 0%bv) then
+           let%write st := State__Full in
+           pass
          else
            shift
     }}.
 
-  Definition specResult m :=
-    match m with
-    | Spec__Enq _ => unit
-    | Spec__Deq => unit
-    | Spec__Tick => unit
-    end.
+  Instance circuit : Circuit :=
+    {| circuitInit := mk
+    ; circuitResult m :=
+        match m with
+        | SpecLeakage__Enq _  => unit
+        | SpecLeakage__Deq => unit
+        | SpecLeakage__Rule => unit
+        end
+    ; circuitCall m :=
+        match m with
+        | SpecLeakage__Enq a => enq a
+        | SpecLeakage__Deq => deq
+        | SpecLeakage__Rule => rule
+        end
+    ; circuitTrace := trace
+    |}.
+End MultiplierSpec.
 
-  Definition runSpec m : ActionValue (specResult m) :=
-    match m with
-    | Spec__Enq a => enq a
-    | Spec__Deq => deq
-    | Spec__Tick => tick
-    end.
-
-  Definition runSpec1 m := runAction1 (runSpec m).
-  Definition runSpecs xs := fold_left (fun a b => runSpec1 b a) xs.
-
-  Definition circuit : Circuit t spec := {| init := mk; run := runSpec1 |}.
-End Spec.
-
-Definition invariant s1 s2 :=
-  s1.(Impl.st) = s2.(Spec.st) /\
-    s1.(Impl.a) = s2.(Spec.a) /\
-    s1.(Impl.trace) = s2.(Spec.trace).
-
-Ltac t0 :=
-  match goal with
-  | t : Spec.t_inner |- _ => destruct t
-  | t : Impl.t_inner |- _ => destruct t
-  | m : method |- _ => destruct m
-  | s : spec |- _ => destruct s
-  | st : state |- _ => destruct st
-  | |- context [ decide _ ] => case_decide
-  | H : _ /\ _ |- _ => destruct_and! H
-  | |- _ /\ _ => split
+Definition policy1 m :=
+  match m with
+  | Enq a b => SpecLeakage__Enq a
+  | Deq => SpecLeakage__Deq
+  | Rule => SpecLeakage__Rule
   end.
 
-Ltac t1 :=
-  unfold refines, bind, fmap, modify,
-    get, runAction1, runAction,
-    Impl.enq, Spec.enq, Impl.deq, Spec.deq,
-    Impl.tick, Spec.tick, Impl.shift_and_add, Spec.shift,
-    Impl.runMethod1, Spec.runSpec1, Impl.runMethod, Spec.runSpec,
-    Impl.runMethods, Spec.runSpecs, runAction in *.
+Definition policy := map policy1.
 
-Ltac t2 := t1; simplify; t1; repeat (t0; simplify).
-Ltac t := t2; try (equality || eauto 7).
+Definition inv (s1 : Multiplier.t) (s2 : MultiplierSpec.t) :=
+  s1.(Multiplier.st) = s2.(MultiplierSpec.st) /\
+    s1.(Multiplier.a) = s2.(MultiplierSpec.a) /\
+    s1.(Multiplier.trace) = s2.(MultiplierSpec.trace).
 
-Lemma enq_ok : forall s1 s2 a b,
-    invariant s1 s2 ->
-    invariant (runAction1 (Impl.enq a b) s1)
-      (runAction1 (Spec.enq a) s2).
-Proof.
-  unfold invariant in *; t.
-Qed.
+Local Ltac t0 :=
+  match goal with
+  | m : method |- _ => destruct m
+  | |- context [ decide _ ] => case_decide
+  | |- _ /\ _ => split
+  | |- constantTime _ _ => eapply simulationConstantTime
+  end.
 
-Lemma deq_ok : forall s1 s2,
-    invariant s1 s2 ->
-    invariant (runAction1 Impl.deq s1)
-      (runAction1 Spec.deq s2).
-Proof.
-  unfold invariant in *; t.
-Qed.
+Local Ltac t1 :=
+  unfold bind, fmap, modify, get,
+    runAction2, runAction, circuitStep,
+    Multiplier.enq, MultiplierSpec.enq,
+    Multiplier.deq, MultiplierSpec.deq,
+    Multiplier.rule, MultiplierSpec.rule,
+    Multiplier.shiftAndAdd, MultiplierSpec.shift,
+    runCircuit, simulates, inv in *.
 
-Lemma tick_ok : forall s1 s2,
-    invariant s1 s2 ->
-    invariant (runAction1 Impl.tick s1)
-      (runAction1 Spec.tick s2).
-Proof.
-  unfold invariant in *; t.
-Qed.
+Local Ltac t2 := solve [ equality | eauto 8 ].
+Local Ltac t3 := simplify; t1; repeat (simplify; t1; try t0; try t2).
+Local Ltac t := try t2; t3; t2.
 
-Local Hint Resolve enq_ok deq_ok tick_ok : core.
-
-Theorem refines_ok : refines Impl.circuit Spec.circuit policy invariant.
+Theorem simulatesOk : Multiplier.circuit ∼ MultiplierSpec.circuit : policy1; inv.
 Proof.
   t.
 Qed.
 
-Local Hint Resolve refines_ok : core.
+Local Hint Resolve simulatesOk : core.
 
-Lemma invariant_start : invariant Impl.mk Spec.mk.
+Theorem constantTimeOk : constantTime Multiplier.circuit policy.
 Proof.
-  unfold invariant in *; t.
-Qed.
-
-Local Hint Resolve invariant_start : core.
-
-Corollary simulates_ok : policy ⊢ Impl.circuit ∼ Spec.circuit.
-Proof.
-  unfold simulates in *; exists invariant; t.
-Qed.
-
-Local Hint Resolve simulates_ok : core.
-
-Lemma runMethods_invariant : forall xs,
-    invariant (Impl.runMethods xs Impl.mk)
-      (Spec.runSpecs (map policy xs) Spec.mk).
-Proof.
-  induction xs using rev_ind.
-  - t.
-  - t1. rewrite map_app. repeat rewrite fold_left_app. eauto.
-Qed.
-
-Local Hint Resolve runMethods_invariant : core.
-
-Theorem ct : exists f, forall xs s,
-    s = Impl.runMethods xs Impl.mk ->
-    s.(Impl.trace) = f (map policy xs).
-Proof.
-  exists (fun xs => (Spec.runSpecs xs Spec.mk).(Spec.trace)); intros;
-  pose proof (runMethods_invariant xs); unfold invariant in *; t.
+  t.
 Qed.

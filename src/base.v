@@ -21,8 +21,15 @@ Ltac equality := intuition congruence.
 Ltac propositional := intuition.
 
 Notation Maybe := @option.
-Definition Valid {t} := Some (A := t).
-Definition Invalid {t} := None (A := t).
+Notation Valid := (@Some _).
+Notation Invalid := (@None _).
+Notation Bool := bool.
+Notation Vector := vec.
 
-Definition Bool := bool.
-Definition Vector n t := Vector.t t n.
+Definition snoc {A} (x : A) (l : list A) := l ++ [x].
+
+Fixpoint mkVector {t} (zero : t) n {struct n} : Vector t n :=
+  match n with
+  | 0 => vnil
+  | S n => zero ::: mkVector zero n
+  end.

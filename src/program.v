@@ -40,8 +40,6 @@ Notation "x <- y ;; z" :=
   (bind y%action (λ x : _, z%action))
     (at level 100, y at next level, z at level 200, right associativity) : action_scope.
 
-Notation "m .:( f )" := (f ∘ m) : action_scope.
-
 Infix ">>=" := bind (at level 60) : action_scope.
 
 Infix ">>|" := fmap (at level 60) : action_scope.
@@ -50,20 +48,20 @@ Notation " '$' m " := (get >>| m)%action (at level 90) : action_scope.
 
 Notation " 'when' c 'then' e " := (if c then e else pass) (at level 200) : action_scope.
 
-Notation " f1 <=: v" :=
-  (modify (set f1 (fun _ => v))) (at level 90) : action_scope.
+Notation " f1 ↤ v" :=
+  (modify (set f1 (fun _ => v))) (at level 70) : action_scope.
 
-Notation " f1 .:( f2 ) <=: v" :=
-  (modify (set f1 (set f2 (fun _ => v)))) : action_scope.
+(* Notation " <| f1 ; f2 |> ⇜ v" := *)
+(*   (modify (set f1 (set f2 (fun _ => v)))) (at level 70, f2 at next level) : action_scope. *)
 
-Notation " f1 .:( f2 ) .:( f3 ) <=: v" :=
-  (modify (set f1 (set f2 (set f3 (fun _ => v))))) : action_scope.
+(* Notation " <| f1 ; f2 ; f3 |> ⇜ v" := *)
+(*   (modify (set f1 (set f2 (set f3 (fun _ => v))))) : action_scope. *)
 
-Notation " f1 .:( f2 ) .:( f3 ) .:( f4 ) <=: v" :=
-  (modify (set f1 (set f2 (set f3 (set f4 (fun _ => v)))))) : action_scope.
+(* Notation " <| f1 ; f2 ; f3 ; f4 |> ⇜ v" := *)
+(*   (modify (set f1 (set f2 (set f3 (set f4 (fun _ => v)))))) : action_scope. *)
 
-Notation " f1 .:( f2 ) .:( f3 ) .:( f4 ) .:( f5 ) <=: v" :=
-  (modify (set f1 (set f2 (set f3 (set f4 (set f5 (fun _ => v))))))) : action_scope.
+(* Notation " <| f1 ; f2 ; f3 ; f4 ; f5 |> ⇜ v" := *)
+(*   (modify (set f1 (set f2 (set f3 (set f4 (set f5 (fun _ => v))))))) : action_scope. *)
 
 Notation " L ↩ l " := (modify (set L (fun v => v ++ [l]))) (at level 40) : action_scope.
 
