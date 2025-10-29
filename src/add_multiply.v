@@ -19,7 +19,10 @@ Inductive state :=
 | State__Decode
 | State__Execute.
 
-Inductive implLeakage := .
+Inductive implLeakage :=
+| ImplLeak__GetIReq
+| ImplLeak__GetIResp
+| ImplLeak__Rule.
 
 Instance state__EqDecision : EqDecision state.
 Proof.
@@ -56,6 +59,7 @@ Module AddMultiply.
   Definition getIReq :=
     {{ let%read toImem0 := toImem in
        if (Fifo.notEmpty toImem0) then
+         let%modify trace := snoc ImplLeak__GetIReq in
          let%call d := Fifo.deq on toImem in
          match d with
          | Valid d => ret d
@@ -67,7 +71,9 @@ Module AddMultiply.
 
   Definition getIResp instr :=
     {{ let%read fromImem0 := fromImem in
-       guard (Fifo.notFull fromImem0) then
+       let%read toImem0 := toImem in
+       guard (Fifo.notFull fromImem0 && Fifo.notFull toImem0) then
+         let%modify trace := snoc ImplLeak__GetIResp in
          let%call _ := Fifo.enq instr on fromImem in
          pass
     }}.
@@ -76,6 +82,7 @@ Module AddMultiply.
     {{ let%read pc0 := pc in
        let%read toImem0 := toImem in
        guard (Fifo.notFull toImem0) then
+         let%modify trace := snoc ImplLeak__Rule in
          let%call _ := Fifo.enq pc0 on toImem in
          let%write st := State__Decode in
          pass
@@ -87,6 +94,7 @@ Module AddMultiply.
        let%read d2e0      := d2e in
        let%read rf0       := rf in
        guard (Fifo.notFull d2e0 && Fifo.notEmpty fromImem0 && Fifo.notFull toImem0) then
+         let%modify trace := snoc ImplLeak__Rule in
          let%call instr := Fifo.deq on fromImem in
          match instr with
          | Valid Unknown =>
@@ -146,6 +154,7 @@ Module AddMultiply.
   Definition execute :=
     {{ let%read d2e0 := d2e in
        guard (Fifo.notEmpty d2e0) then
+         let%modify trace := snoc ImplLeak__Rule in
          let instr := Fifo.first d2e0 in
          match instr with
          | Valid (DAdd rd v1 v2) => executeAdd rd v1 v2
@@ -185,23 +194,21 @@ Section example.
   Notation runCircuit := (runCircuit (c := AddMultiply.circuit)).
 
   Definition ms :=
-    [Rule
+    [Rule (* fetch *)
      ; GetIReq
      ; GetIResp (Addi 1%bv 0%bv 3%bv)
-     ; Rule
-     ; Rule
-     ; Rule
-     ; Rule
-     ; Rule
-     ; GetIResp (Addi 2%bv 0%bv 4%bv)
+     ; Rule (* decode *)
+     ; Rule (* execute *)
+     ; Rule (* fetch  *)
      ; GetIReq
-     ; Rule
-     ; Rule
-     ; Rule
+     ; GetIResp (Addi 2%bv 0%bv 4%bv)
+     ; Rule (* decode *)
+     ; Rule (* execute *)
+     ; Rule (* fetch *)
      ; GetIReq
      ; GetIResp (Mul 3%bv 1%bv 2%bv)
-     ; Rule
-     ; Rule
+     ; Rule (* decode *)
+     ; Rule (* execute... *)
      ; Rule
      ; Rule
      ; Rule
