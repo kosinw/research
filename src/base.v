@@ -16,7 +16,9 @@ From RecordUpdate Require Export RecordUpdate.
 #[export] Set Implicit Arguments.
 #[export] Set Warnings "-notation-for-abbreviation".
 
-Ltac simplify := repeat progress (intros; simpl in *; list_simplifier; subst).
+Ltac simplify :=
+  repeat progress (simpl in *; intros; autounfold with core in *; list_simplifier; subst).
+
 Ltac equality := intuition congruence.
 Ltac propositional := intuition.
 
@@ -33,3 +35,9 @@ Fixpoint mkVector {t} (zero : t) n {struct n} : Vector t n :=
   | 0 => vnil
   | S n => zero ::: mkVector zero n
   end.
+
+Class Default A := default: A.
+Global Hint Mode Default ! : typeclass_instances.
+Notation "'δ'" := default (at level 0, format "δ").
+
+Global Instance default_inhabited `(Default A) : Inhabited A := populate δ.

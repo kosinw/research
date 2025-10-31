@@ -1,8 +1,5 @@
 From research Require Import base.
 
-Set Warnings "-notation-for-abbreviation".
-Set Asymmetric Patterns.
-
 Section WithContext.
   Context {s : Type}.
 
@@ -26,7 +23,7 @@ Section WithContext.
   Definition runAction2 {a} (m : Action a) := (snd ∘ (runAction (a := a) m)).
 End WithContext.
 
-Notation ActionUnit := (Action unit).
+Global Hint Unfold get put modify bind ret runAction runAction1 runAction2 : core.
 
 Declare Scope action_scope.
 Delimit Scope action_scope with action.
@@ -64,4 +61,3 @@ Notation "'let%call' x ':=' e1 'on' field 'in' e2" :=
       e2 at level 200, right associativity) : action_scope.
 
 Notation " 'when' c 'then' e " := (if c then e else pass) (at level 200) : action_scope.
-Notation " 'guard' c 'then' e " := (if c then e else pass) (at level 200) : action_scope.

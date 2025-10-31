@@ -8,18 +8,18 @@ Class Circuit (t m tr : Type) :=
   ; circuitTrace : t -> list tr
   }.
 
-Definition circuitStep `{c : Circuit t m tr} (method : m) (state : t) : t :=
-  @runAction2 t (circuitResult method) (circuitCall method) state.
+Definition circuitStep `(c : Circuit t m tr) (method : m) (state : t) : t :=
+  runAction2 (circuitCall method) state.
 
-Definition circuitSteps `{c : Circuit t m tr} (ms : list m) (state : t) : t :=
-  fold_left (fun st m => circuitStep m st) ms state.
+Definition circuitSteps `(c : Circuit t m tr) (ms : list m) (state : t) : t :=
+  fold_left (fun st m => circuitStep c m st) ms state.
 
-Definition runCircuit `{c : Circuit t m tr} (ms : list m) : t :=
-  circuitSteps ms circuitInit.
+Definition runCircuit `(c : Circuit t m tr) (ms : list m) : t :=
+  circuitSteps c ms circuitInit.
 
-Lemma circuitStepsApp `{c: Circuit t m tr} : forall xs1 xs2 st,
-    circuitSteps (xs1 ++ xs2) st =
-      circuitSteps xs2 (circuitSteps xs1 st).
+Lemma circuitStepsApp `(c: Circuit t m tr) : forall xs1 xs2 st,
+    circuitSteps c (xs1 ++ xs2) st =
+      circuitSteps c xs2 (circuitSteps c xs1 st).
 Proof.
   cbv [circuitSteps].
   intros ???.
@@ -27,9 +27,9 @@ Proof.
   equality.
 Qed.
 
-Lemma runCircuitApp `{c: Circuit t m tr} : forall xs1 xs2,
-    runCircuit (xs1 ++ xs2) =
-      circuitSteps xs2 (runCircuit xs1).
+Lemma runCircuitApp `(c: Circuit t m tr) : forall xs1 xs2,
+    runCircuit c (xs1 ++ xs2) =
+      circuitSteps c xs2 (runCircuit c xs1).
 Proof.
   cbv [runCircuit].
   intros ??.
@@ -44,8 +44,8 @@ Definition simulates
   forall s1 s2,
     R s1 s2 ->
     (forall m s1' s2',
-        s1' = circuitStep m s1 ->
-        s2' = circuitStep (policy m) s2 ->
+        s1' = circuitStep c1 m s1 ->
+        s2' = circuitStep c2 (policy m) s2 ->
         R s1' s2').
 
 Notation "c1 ∼ c2 : policy ; R" := (simulates c1 c2 policy R) (at level 60, c2 at next level).
@@ -56,7 +56,7 @@ Notation "c1 ∼ c2 : policy ; R" := (simulates c1 c2 policy R) (at level 60, c2
    leakage we can determine the implementation leakage trace, we get constant time
    wrt [policy]. *)
 Definition constantTime {m2} `(c : Circuit t m1 tr) (policy : list m1 -> list m2) :=
-  exists f, forall xs, circuitTrace (runCircuit xs) = f (policy xs).
+  exists f, forall xs, circuitTrace (runCircuit c xs) = f (policy xs).
 
 Lemma simulationConstantTime `(c1 : Circuit t1 m1 tr) `(c2 : Circuit t2 m2 tr) policy :
   forall R, (c1 ∼ c2 : policy; R) ->
@@ -66,7 +66,7 @@ Lemma simulationConstantTime `(c1 : Circuit t1 m1 tr) `(c2 : Circuit t2 m2 tr) p
 Proof.
   intros R Hsimulates Hinit Htrace.
   cbv [ constantTime simulates ] in *.
-  exists (fun zs => circuitTrace (runCircuit zs)).
+  exists (fun zs => circuitTrace (runCircuit c2 zs)).
   intros.
   apply Htrace.
   induction xs using rev_ind.
@@ -75,8 +75,8 @@ Proof.
     rewrite !runCircuitApp.
     simplify.
     apply Hsimulates with
-      (s1 := runCircuit xs)
-      (s2 := runCircuit (map policy xs))
+      (s1 := runCircuit c1 xs)
+      (s2 := runCircuit c2 (map policy xs))
       (m := x); equality.
 Qed.
 

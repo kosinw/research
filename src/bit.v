@@ -19,3 +19,7 @@ Definition signExtend {n z} := bv_sign_extend (n := n) z.
 Definition concat {n n1 n2} := bv_concat n (n1 := n1) (n2 := n2).
 
 Infix "++:" := concat (at level 60, right associativity) : bv_scope.
+
+Definition truncate1 {n} := truncate (n := n) (z := 1).
+
+Instance defaultBit n : Default (Bit n) := (bv_0 n).

@@ -1,36 +1,40 @@
 From research Require Import base circuit.
 
-Module Fifo.
-  Section WithContext.
-    Context (a : Type).
+Section WithContext.
+  Context (a : Type) `{Default a}.
 
-    Record t := { first : Maybe a }.
+  Record Fifo := { fifoContents : Maybe a }.
 
-    Definition mk := {| first := Invalid |}.
+  Definition mkFifo := {| fifoContents := Invalid |}.
 
-    Definition notEmpty s := bool_decide (s.(first) <> Invalid).
-    Definition notFull s := bool_decide (s.(first) = Invalid).
+  Definition fifoNotEmpty s := bool_decide (s.(fifoContents) <> Invalid).
+  Definition fifoNotFull s := bool_decide (s.(fifoContents) = Invalid).
 
-    Definition enq in__a :=
-      {{ let%read first0 := first in
-         guard decide (first0 = Invalid) then
-           let%write first := Valid in__a in
-           pass
-      }}.
+  Definition fifoEnq in__a :=
+    {{ let%read first := fifoContents in
+       when decide (first = Invalid) then
+         let%write fifoContents := Valid in__a in
+         pass
+    }}.
 
-    Definition deq :=
-      {{ let%read first0 := first in
-         if decide (first0 <> Invalid) then
-           let%write first := Invalid in
-           ret first0
-         else
-           ret Invalid
-      }}.
-  End WithContext.
+  Definition fifoDeq :=
+    {{ let%read first := fifoContents in
+       let%write fifoContents := Invalid in
+       match first with
+       | Valid x => ret x
+       | Invalid => ret δ
+       end
+    }}.
 
-  Arguments mk {_}.
-  Arguments enq {_} (_ _).
-  Arguments deq {_} (_).
-  Arguments notEmpty {_} (_).
-  Arguments notFull {_} (_).
-End Fifo.
+  Definition fifoFirst s :=
+    match s.(fifoContents) with
+    | Valid x => x
+    | Invalid => δ
+    end.
+End WithContext.
+
+Arguments mkFifo {_}.
+Arguments fifoEnq {_} (_ _).
+Arguments fifoDeq {_ _} (_).
+Arguments fifoNotEmpty {_} (_).
+Arguments fifoNotFull {_} (_).

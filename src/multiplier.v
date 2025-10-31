@@ -24,148 +24,157 @@ Inductive state :=
 
 Instance state__EqDecision : EqDecision state. solve_decision. Defined.
 
-Module Multiplier.
-  Record t :=
-    { a : Bit 4
-    ; b : Bit 4
-    ; c : Bit 2
-    ; p : Bit 8
-    ; st : state
-    ; trace : list implLeakage
-    }.
+Record Multiplier :=
+  { multiplierA : Bit 4
+  ; multiplierB : Bit 4
+  ; multiplierC : Bit 2
+  ; multiplierP : Bit 8
+  ; multiplierSt : state
+  ; multiplierTrace : list implLeakage
+  }.
 
-  Definition mk :=
-    {| a := 0%bv
-    ; b := 0%bv
-    ; c := 0%bv
-    ; p := 0%bv
-    ; st := State__Empty
-    ; trace := []
-    |}.
+Definition mkMultiplier :=
+  {|
+    multiplierA := 0%bv;
+    multiplierB := 0%bv;
+    multiplierC := 0%bv;
+    multiplierP := 0%bv;
+    multiplierSt := State__Empty;
+    multiplierTrace := []
+  |}.
 
-  Definition enq in__a in__b :=
-    {{ let%read st0 := st in
-       guard decide (st0 = State__Empty) then
-         let%modify trace := snoc ImplLeakage__Enq in
-         let%write a      := in__a in
-         let%write b      := in__b in
-         let%write c      := 0%bv in
-         let%write p      := 0%bv in
-         let%write st     := State__Busy in
+Definition multiplierEnq in__a in__b :=
+  {{ let%read st := multiplierSt in
+     when decide (st = State__Empty) then
+       let%modify multiplierTrace := snoc ImplLeakage__Enq in
+       let%write multiplierA      := in__a in
+       let%write multiplierB      := in__b in
+       let%write multiplierC      := 0%bv in
+       let%write multiplierP      := 0%bv in
+       let%write multiplierSt     := State__Busy in
+       pass
+  }}.
+
+Definition multiplierDeq :=
+  {{ let%read st := multiplierSt in
+     let%read p  := multiplierP  in
+     if decide (st = State__Full) then
+       let%modify multiplierTrace := snoc ImplLeakage__Deq in
+       let%write  multiplierSt    := State__Empty          in
+       ret (Valid p)
+     else
+       ret Invalid
+  }}.
+
+Definition multiplierShiftAndAdd :=
+  {{ let%read a := multiplierA in
+     let%read b := multiplierB in
+     let%read c := multiplierC in
+     let%read p := multiplierP in
+     when decide (a <> 0%bv) then
+       let t :=
+         if decide (truncate1 a = 1)%bv then
+           zeroExtend (z := 8) b
+         else
+           0%bv
+       in
+       let%write multiplierP := (p + (t ≪ zeroExtend c))%bv in
+       let%write multiplierA := (a ≫ 1)%bv in
+       let%write multiplierC := (c + 1)%bv in
+       pass
+  }}.
+
+Definition multiplierRule :=
+  {{ let%read st := multiplierSt in
+     let%read a  := multiplierA  in
+     when decide (st = State__Busy) then
+       let%modify multiplierTrace := snoc ImplLeakage__Rule in
+       if decide (a = 0%bv) then
+         let%write multiplierSt := State__Full in
          pass
-    }}.
-
-  Definition deq :=
-    {{ let%read st0 := st in
-       let%read p0  := p  in
-       if decide (st0 = State__Full) then
-         let%modify trace := snoc ImplLeakage__Deq in
-         let%write  st    := State__Empty          in
-         ret (Valid p0)
        else
-         ret Invalid
-    }}.
+         multiplierShiftAndAdd
+  }}.
 
-  Definition shiftAndAdd :=
-    {{ let%read a0 := a in
-       let%read b0 := b in
-       let%read c0 := c in
-       let%read p0 := p in
-       guard decide (a0 <> 0%bv) then
-         let t :=
-           if decide (truncate (z := 1) a0 = 1)%bv then
-             zeroExtend (z := 8) b0
-           else
-             0%bv
-         in
-         let%write p := (p0 + (t ≪ zeroExtend (z := 8) c0))%bv in
-         let%write a := (a0 ≫ 1)%bv in
-         let%write c := (c0 + 1)%bv in
+Instance multiplierCircuit : Circuit :=
+  {|
+    circuitInit := mkMultiplier;
+    circuitResult m :=
+      match m with
+      | Enq _ _ => unit
+      | Deq => Maybe (Bit 8)
+      | Rule => unit
+      end;
+    circuitCall m :=
+      match m with
+      | Enq a b => multiplierEnq a b
+      | Deq => multiplierDeq
+      | Rule => multiplierRule
+      end;
+    circuitTrace := multiplierTrace
+  |}.
+
+Record MultiplierSpec :=
+  { multiplierSpecSt : state
+  ; multiplierSpecA : Bit 4
+  ; multiplierSpecTrace : list implLeakage
+  }.
+
+Definition mkMultiplierSpec :=
+  {|
+    multiplierSpecSt := State__Empty;
+    multiplierSpecA := 0%bv;
+    multiplierSpecTrace := []
+  |}.
+
+Definition multiplierSpecEnq in__a :=
+  {{ let%read st := multiplierSpecSt in
+     when decide (st = State__Empty) then
+       let%modify multiplierSpecTrace := snoc ImplLeakage__Enq in
+       let%write multiplierSpecA := in__a in
+       let%write multiplierSpecSt := State__Busy in
+       pass
+  }}.
+
+Definition multiplierSpecDeq :=
+  {{ let%read st := multiplierSpecSt in
+     when decide (st = State__Full) then
+       let%modify multiplierSpecTrace := snoc ImplLeakage__Deq in
+       let%write multiplierSpecSt := State__Empty in
+       pass
+  }}.
+
+Definition multiplierSpecShift :=
+  {{ let%read a := multiplierSpecA in
+     when decide (a <> 0%bv) then
+       let%write multiplierSpecA := (a ≫ 1)%bv in
+       pass
+  }}.
+
+Definition multiplierSpecRule :=
+  {{ let%read st := multiplierSpecSt in
+     let%read a := multiplierSpecA in
+     when decide (st = State__Busy) then
+       let%modify multiplierSpecTrace := snoc ImplLeakage__Rule in
+       if decide (a = 0%bv) then
+         let%write multiplierSpecSt := State__Full in
          pass
-    }}.
+       else
+         multiplierSpecShift
+  }}.
 
-  Definition rule :=
-    {{ let%read st0 := st in
-       let%read a0  := a  in
-       guard decide (st0 = State__Busy) then
-         let%modify trace := snoc ImplLeakage__Rule in
-         if decide (a0 = 0%bv) then
-           let%write st := State__Full in
-           pass
-         else
-           shiftAndAdd
-    }}.
-
-  Instance circuit : Circuit :=
-    {| circuitInit := mk
-    ; circuitResult m := match m with Enq _ _ => unit | Deq => Maybe (Bit 8) | Rule => unit end
-    ; circuitCall m := match m with Enq a b => enq a b | Deq => deq | Rule => rule end
-    ; circuitTrace := trace
-    |}.
-End Multiplier.
-
-Module MultiplierSpec.
-  Record t :=
-    { st : state
-    ; a : Bit 4
-    ; trace : list implLeakage
-    }.
-
-  Definition mk := {| st := State__Empty; a := 0%bv; trace := [] |}.
-
-  Definition enq in__a :=
-    {{ let%read st0 := st in
-       guard decide (st0 = State__Empty) then
-         let%modify trace := snoc ImplLeakage__Enq in
-         let%write a := in__a in
-         let%write st := State__Busy in
-         pass
-    }}.
-
-  Definition deq :=
-    {{ let%read st0 := st in
-       guard decide (st0 = State__Full) then
-         let%modify trace := snoc ImplLeakage__Deq in
-         let%write st := State__Empty in
-         pass
-    }}.
-
-  Definition shift :=
-    {{ let%read a0 := a in
-       guard decide (a0 <> 0%bv) then
-         let%write a := (a0 ≫ 1)%bv in
-         pass
-    }}.
-
-  Definition rule :=
-    {{ let%read st0 := st in
-       let%read a0 := a in
-       guard decide (st0 = State__Busy) then
-         let%modify trace := snoc ImplLeakage__Rule in
-         if decide (a0 = 0%bv) then
-           let%write st := State__Full in
-           pass
-         else
-           shift
-    }}.
-
-  Instance circuit : Circuit :=
-    {| circuitInit := mk
-    ; circuitResult m :=
-        match m with
-        | SpecLeakage__Enq _  => unit
-        | SpecLeakage__Deq => unit
-        | SpecLeakage__Rule => unit
-        end
-    ; circuitCall m :=
-        match m with
-        | SpecLeakage__Enq a => enq a
-        | SpecLeakage__Deq => deq
-        | SpecLeakage__Rule => rule
-        end
-    ; circuitTrace := trace
-    |}.
-End MultiplierSpec.
+Instance multiplierSpecCircuit : Circuit :=
+  {|
+    circuitInit := mkMultiplierSpec;
+    circuitResult m := unit;
+    circuitCall m :=
+      match m with
+      | SpecLeakage__Enq a => multiplierSpecEnq a
+      | SpecLeakage__Deq => multiplierSpecDeq
+      | SpecLeakage__Rule => multiplierSpecRule
+      end;
+    circuitTrace := multiplierSpecTrace
+  |}.
 
 Definition policy1 m :=
   match m with
@@ -176,40 +185,36 @@ Definition policy1 m :=
 
 Definition policy := map policy1.
 
-Definition inv (s1 : Multiplier.t) (s2 : MultiplierSpec.t) :=
-  s1.(Multiplier.st) = s2.(MultiplierSpec.st) /\
-    s1.(Multiplier.a) = s2.(MultiplierSpec.a) /\
-    s1.(Multiplier.trace) = s2.(MultiplierSpec.trace).
+Definition inv (s1 : Multiplier) (s2 : MultiplierSpec) :=
+  s1.(multiplierSt) = s2.(multiplierSpecSt) /\
+    s1.(multiplierA) = s2.(multiplierSpecA) /\
+    s1.(multiplierTrace) = s2.(multiplierSpecTrace).
 
 Local Ltac t0 :=
   match goal with
   | m : method |- _ => destruct m
   | |- context [ decide _ ] => case_decide
-  | |- _ /\ _ => split
-  | |- constantTime _ _ => eapply simulationConstantTime
+  | _ => progress simplify
   end.
 
-Local Ltac t1 :=
-  unfold bind, fmap, modify, get,
-    runAction2, runAction, circuitStep,
-    Multiplier.enq, MultiplierSpec.enq,
-    Multiplier.deq, MultiplierSpec.deq,
-    Multiplier.rule, MultiplierSpec.rule,
-    Multiplier.shiftAndAdd, MultiplierSpec.shift,
-    runCircuit, simulates, inv in *.
+Local Hint Unfold
+  multiplierEnq multiplierSpecEnq
+  multiplierDeq multiplierSpecDeq
+  multiplierRule multiplierSpecRule
+  multiplierShiftAndAdd multiplierSpecShift
+  circuitStep inv : core.
 
-Local Ltac t2 := solve [ equality | eauto 8 ].
-Local Ltac t3 := simplify; t1; repeat (simplify; t1; try t0; try t2).
-Local Ltac t := try t2; t3; t2.
+Local Ltac t := repeat t0; solve [ equality | eauto 8 ].
 
-Theorem simulatesOk : Multiplier.circuit ∼ MultiplierSpec.circuit : policy1; inv.
+Theorem simulatesOk : multiplierCircuit ∼ multiplierSpecCircuit : policy1; inv.
 Proof.
+  cbv [ simulates ] in *.
   t.
 Qed.
 
 Local Hint Resolve simulatesOk : core.
 
-Theorem constantTimeOk : constantTime Multiplier.circuit policy.
+Theorem constantTimeOk : constantTime multiplierCircuit policy.
 Proof.
-  t.
+  apply simulationConstantTime with (R := inv) (c2 := multiplierSpecCircuit); t.
 Qed.
