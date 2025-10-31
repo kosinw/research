@@ -1,21 +1,22 @@
 From research Require Import base.
 From research Require Export action.
+From stdpp Require Import option.
 
 Class Circuit (t m tr : Type) :=
-  { circuitInit : t
+  { mkCircuit : t
   ; circuitResult : m -> Type
   ; circuitCall : forall (method : m), @Action t (circuitResult method)
   ; circuitTrace : t -> list tr
   }.
 
 Definition circuitStep `(c : Circuit t m tr) (method : m) (state : t) : t :=
-  runAction2 (circuitCall method) state.
+  default state (runAction2 (circuitCall method) state).
 
 Definition circuitSteps `(c : Circuit t m tr) (ms : list m) (state : t) : t :=
   fold_left (fun st m => circuitStep c m st) ms state.
 
 Definition runCircuit `(c : Circuit t m tr) (ms : list m) : t :=
-  circuitSteps c ms circuitInit.
+  circuitSteps c ms mkCircuit.
 
 Lemma circuitStepsApp `(c: Circuit t m tr) : forall xs1 xs2 st,
     circuitSteps c (xs1 ++ xs2) st =
@@ -60,7 +61,7 @@ Definition constantTime {m2} `(c : Circuit t m1 tr) (policy : list m1 -> list m2
 
 Lemma simulationConstantTime `(c1 : Circuit t1 m1 tr) `(c2 : Circuit t2 m2 tr) policy :
   forall R, (c1 ∼ c2 : policy; R) ->
-       R c1.(circuitInit) c2.(circuitInit) ->
+       R c1.(mkCircuit) c2.(mkCircuit) ->
        (forall t1 t2, R t1 t2 -> c1.(circuitTrace) t1 = c2.(circuitTrace) t2) ->
        constantTime c1 (map policy).
 Proof.

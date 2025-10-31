@@ -22,4 +22,9 @@ Infix "++:" := concat (at level 60, right associativity) : bv_scope.
 
 Definition truncate1 {n} := truncate (n := n) (z := 1).
 
-Instance defaultBit n : Default (Bit n) := (bv_0 n).
+Notation " n '`' z " :=
+  (Z_to_bv n z)
+    (at level 0, n constr, z constr at level 0,
+      format " n '`'  z ") : bv_scope.
+
+Instance defaultBit n : Default (Bit n) := n`0.

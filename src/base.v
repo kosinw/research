@@ -9,7 +9,7 @@
 (*                                                                                *)
 (**********************************************************************************)
 
-From stdpp Require Export base tactics list vector options.
+From stdpp Require Export base tactics list vector option options.
 From RecordUpdate Require Export RecordUpdate.
 
 #[export] Set Printing Projections.

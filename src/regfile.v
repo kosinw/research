@@ -12,7 +12,7 @@ Section WithContext.
     if decide (addr = δ)%bv then δ else t.(regFileContents) !!! encode_fin addr.
 
   Definition regFileUpd (addr : Bit sz) (data : Bit b) :=
-    {{ let%modify regFileContents := vinsert (encode_fin addr) data in
+    {{ let%modify _ := vinsert (encode_fin addr) data on regFileContents in
        pass
     }}.
 End WithContext.
