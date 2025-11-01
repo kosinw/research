@@ -206,7 +206,7 @@ Section WithContext.
     multiplierBusy multiplierSpecBusy
     multiplierFull multiplierSpecFull : core.
 
-  Local Hint Unfold rel circuitStep : core.
+  Local Hint Unfold rel circuitStep nextState : core.
 
   Local Ltac t0 :=
     match goal with

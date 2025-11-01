@@ -4,7 +4,7 @@ From stdpp Require Import option.
 
 Class Circuit (s m tr : Type) :=
   { mkCircuit : s
-  ; circuitCall : forall (method : m), @Action s unit
+  ; circuitCall : m -> @Action s unit
   ; circuitTrace : s -> list tr
   }.
 

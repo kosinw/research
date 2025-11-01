@@ -4,7 +4,6 @@ From stdpp Require Import option.
 Section WithContext.
   Context {s : Type}.
 
-  (* An action is a guarded state monad. *)
   Definition Action (t : Type) := s -> option (t * s).
 
   Definition ret {t} (x : t) : Action t := fun s => Some (x, s).
@@ -29,7 +28,7 @@ Section WithContext.
   Definition guard {t} (b : s -> bool) (m : Action t) : Action t :=
     fun s => if b s then m s else fail s.
 
-  Definition lift {t} (o : option t) : Action t :=
+  Definition optionAction {t} (o : option t) : Action t :=
     fun s => option_map (fun x => (x, s)) o.
 
   Definition runAction {a} (m : Action a) (x : s) := m x.
@@ -53,7 +52,7 @@ Definition call {s a b}
   (setter : a -> s -> s)
   (action : Action (s := a) b) : Action (s := s) b :=
   get >>= (fun st =>
-    lift (runAction action (getter st)) >>= (fun '(x, st') =>
+    optionAction (runAction action (getter st)) >>= (fun '(x, st') =>
       put (setter st' st) >>| (fun _ => x))).
 
 Notation "'{{' e '}}'" := (e%action).
@@ -86,7 +85,8 @@ Notation "'let%call' x ':=' e1 'on' proj 'in' e2" :=
 
 Notation " 'when' c 'then' e " := (if c then e else pass) (at level 200) : action_scope.
 
-Global Hint Unfold get put modify fmap bind ret fail pass guard lift : core.
-Global Hint Unfold runAction nextState : core.
+Global Hint Unfold get put modify fmap bind ret : core.
+Global Hint Unfold fail pass guard optionAction : core.
+Global Hint Unfold runAction : core.
 Global Hint Unfold getField call : core.
 Global Hint Unfold option_map from_option : core.
