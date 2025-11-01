@@ -1,11 +1,10 @@
+From research Require Import base.
 From stdpp Require Import fin finite.
-From research Require Import base bit circuit multiplier fifo regfile.
-
-Notation Maybe := @option.
+From research Require Import bit circuit multiplier fifo regfile.
 
 Inductive Instr :=
 | Add (rd rs1 rs2 : Bit 5)
-| Addi (rd rs1 : Bit 5) (imm : Bit 4)
+| Addi (rd rs1 : Bit 5) (imm : Bit 8)
 | Mul (rd rs1 rs2 : Bit 5)
 | Nop
 | Unknown.
@@ -13,8 +12,8 @@ Inductive Instr :=
 Instance defaultInstr : Default Instr := Nop.
 
 Inductive method :=
-| GetIReq
-| GetIResp (resp : Instr)
+| DeqIReq
+| EnqIResp (resp : Instr)
 | Rule.
 
 Inductive state :=
@@ -23,10 +22,10 @@ Inductive state :=
 | State__Execute.
 
 Inductive implLeakage :=
-| ImplLeak__Pc (l : Bit 32)
-| ImplLeak__Add
-| ImplLeak__Nop
-| ImplLeak__Mul (a : Bit 4).
+| Impl__Pc (l : Bit 32)
+| Impl__Add
+| Impl__Nop
+| Impl__Mul (a : Bit 8).
 
 Instance state__EqDecision : EqDecision state.
 Proof.
@@ -34,15 +33,15 @@ Proof.
 Defined.
 
 Inductive DInstr :=
-| DAdd (rd : Bit 5) (v1 v2 : Bit 4)
-| DMul (rd : Bit 5) (v1 v2 : Bit 4)
+| DAdd (rd : Bit 5) (v1 v2 : Bit 8)
+| DMul (rd : Bit 5) (v1 v2 : Bit 8)
 | DNop.
 
 Instance defaultDInstr : Default DInstr := DNop.
 
 Record AddMultiply :=
   { addMultiplyM        : Multiplier
-  ; addMultiplyRf       : RegFile 4 5
+  ; addMultiplyRf       : RegFile 8 5
   ; addMultiplyPc       : Bit 32
   ; addMultiplyFromImem : Fifo Instr
   ; addMultiplyToImem   : Fifo (Bit 32)
@@ -63,20 +62,30 @@ Definition mkAddMultiply :=
     addMultiplyTrace     := []
   |}.
 
-Definition addMultiplyGetIReq :=
-  {{ let%call d := fifoFirst on addMultiplyToImem in
-     let%call _ := fifoDeq on addMultiplyToImem in
-     ret d
+Definition addMultiplyFetching st :=
+  bool_decide (st.(addMultiplySt) = State__Fetch).
+
+Definition addMultiplyDecoding st :=
+  bool_decide (st.(addMultiplySt) = State__Decode).
+
+Definition addMultiplyExecuting st :=
+  bool_decide (st.(addMultiplySt) = State__Execute).
+
+Definition addMultiplyGetIReq st := fifoFirst st.(addMultiplyToImem).
+
+Definition addMultiplyDeqIReq :=
+  {{ let%call _ := fifoDeq on addMultiplyToImem in
+     pass
   }}.
 
-Definition addMultiplyGetIResp instr :=
+Definition addMultiplyEnqIResp instr :=
   {{ let%call _ := fifoEnq instr on addMultiplyFromImem in
      pass
   }}.
 
 Definition addMultiplyFetch :=
   guard
-    {{ fun st => bool_decide (st.(addMultiplySt) = State__Fetch) }}
+    {{ addMultiplyFetching }}
     {{ let%read pc := addMultiplyPc in
        let%call _ := fifoEnq pc on addMultiplyToImem in
        let%write _ := State__Decode on addMultiplySt in
@@ -85,10 +94,10 @@ Definition addMultiplyFetch :=
 
 Definition addMultiplyDecode :=
   guard
-    {{ fun st => bool_decide (st.(addMultiplySt) = State__Decode) }}
+    {{ addMultiplyDecoding }}
     {{ let%read d2e      := addMultiplyDInstr in
        let%read rf       := addMultiplyRf in
-       let%call instr    := fifoFirst on addMultiplyFromImem in
+       let%read instr    := fifoFirst ∘ addMultiplyFromImem in
        let%call _        := fifoDeq on addMultiplyFromImem in
        match instr with
        | Nop
@@ -121,8 +130,8 @@ Definition addMultiplyExecuteAdd rd v1 v2 :=
      let%call _ := fifoDeq on addMultiplyDInstr in
      let%call _ := regFileUpd rd (v1 + v2)%bv on addMultiplyRf in
      let%write _ := State__Fetch on addMultiplySt in
-     let%modify _ := snoc (ImplLeak__Pc pc) on addMultiplyTrace in
-     let%modify _ := snoc ImplLeak__Add on addMultiplyTrace in
+     let%modify _ := cons (Impl__Pc pc) on addMultiplyTrace in
+     let%modify _ := cons Impl__Add on addMultiplyTrace in
      let%modify _ := fun pc => (pc `+Z` 4)%bv on addMultiplyPc in
      pass
   }}.
@@ -131,15 +140,15 @@ Definition addMultiplyExecuteNop :=
   {{ let%read pc := addMultiplyPc in
      let%call _ := fifoDeq on addMultiplyDInstr in
      let%write _ := State__Fetch on addMultiplySt in
-     let%modify _ := snoc (ImplLeak__Pc pc) on addMultiplyTrace in
-     let%modify _ := snoc ImplLeak__Nop on addMultiplyTrace in
+     let%modify _ := cons (Impl__Pc pc) on addMultiplyTrace in
+     let%modify _ := cons Impl__Nop on addMultiplyTrace in
      let%modify _ := fun pc => (pc `+Z` 4)%bv on addMultiplyPc in
      pass
   }}.
 
 Definition addMultiplyExecuteMul rd v1 v2 :=
   {{ let%read pc := addMultiplyPc in
-     let%read st := (multiplierSt ∘ addMultiplyM) in
+     let%read st := multiplierSt ∘ addMultiplyM in
      match st with
      | State__Empty =>
          let%call _ := multiplierEnq v1 v2 on addMultiplyM in
@@ -148,12 +157,13 @@ Definition addMultiplyExecuteMul rd v1 v2 :=
          let%call _ := multiplierRule on addMultiplyM in
          pass
      | State__Full =>
-         let%call v := multiplierDeq on addMultiplyM in
+         let%read v := (multiplierFirst ∘ addMultiplyM) in
+         let%call _ := multiplierDeq on addMultiplyM in
          let%call _ := fifoDeq on addMultiplyDInstr in
          let%call _ := regFileUpd rd (truncate v) on addMultiplyRf in
          let%write _ := State__Fetch on addMultiplySt in
-         let%modify _ := snoc (ImplLeak__Pc pc) on addMultiplyTrace in
-         let%modify _ := snoc (ImplLeak__Mul v1) on addMultiplyTrace in
+         let%modify _ := cons (Impl__Pc pc) on addMultiplyTrace in
+         let%modify _ := cons (Impl__Mul v1) on addMultiplyTrace in
          let%modify _ := fun pc => (pc `+Z` 4)%bv on addMultiplyPc in
          pass
      end
@@ -161,8 +171,8 @@ Definition addMultiplyExecuteMul rd v1 v2 :=
 
 Definition addMultiplyExecute :=
   guard
-    {{ fun st => bool_decide (st.(addMultiplySt) = State__Execute) }}
-    {{ let%call instr := fifoFirst on addMultiplyDInstr in
+    {{ addMultiplyExecuting }}
+    {{ let%read instr := fifoFirst ∘ addMultiplyDInstr in
        match instr with
        | DAdd rd v1 v2 => addMultiplyExecuteAdd rd v1 v2
        | DMul rd v1 v2 => addMultiplyExecuteMul rd v1 v2
@@ -182,36 +192,85 @@ Definition addMultiplyRule :=
 Instance addMultiplyCircuit : Circuit :=
   {|
     mkCircuit := mkAddMultiply;
-    circuitResult m :=
-      match m with
-      | GetIReq => Bit 32
-      | _ => unit
-      end;
     circuitCall m :=
       match m with
-      | GetIReq => addMultiplyGetIReq
-      | GetIResp resp => addMultiplyGetIResp resp
+      | DeqIReq => addMultiplyDeqIReq
+      | EnqIResp resp => addMultiplyEnqIResp resp
       | Rule => addMultiplyRule
       end;
     circuitTrace := addMultiplyTrace
   |}.
 
 Section example.
-  Definition runCircuit := runCircuit addMultiplyCircuit.
+  Definition x0 := 5`0%bv.
+  Definition x1 := 5`1%bv.
+  Definition x2 := 5`2%bv.
+  Definition x3 := 5`3%bv.
+  Definition x4 := 5`4%bv.
+  Definition x5 := 5`5%bv.
+  Definition x6 := 5`6%bv.
+  Definition x7 := 5`7%bv.
+  Definition x8 := 5`8%bv.
 
-  Example ex0 := mkAddMultiply.
+  (* Execute a single instruction until completion *)
+  Definition executeOneInstr (fuel : nat) (instr : Instr) (st : AddMultiply) : AddMultiply :=
+    (* Fetch stage: send PC to instruction memory *)
+    let st1 := circuitSteps addMultiplyCircuit [Rule; DeqIReq; EnqIResp instr] st in
+    (* Decode stage *)
+    let st2 := circuitStep addMultiplyCircuit Rule st1 in
+    (* Execute stage - may take multiple cycles *)
+    let fix executeUntilFetch (fuel : nat) (st : AddMultiply) : AddMultiply :=
+      match fuel with
+      | 0 => st
+      | S fuel' =>
+          let st' := circuitStep addMultiplyCircuit Rule st in
+          if bool_decide (st'.(addMultiplySt) = State__Fetch) then st'
+          else executeUntilFetch fuel' st'
+      end
+    in
+    executeUntilFetch fuel st2.
 
-  Eval vm_compute in ex0.
+  (* Execute instructions with fuel *)
+  Fixpoint execute (instrs : list Instr) (st : AddMultiply) : AddMultiply :=
+    match instrs with
+    | [] => st
+    | instr :: instrs' =>
+        let st' := executeOneInstr 100 instr st in
+        execute instrs' st'
+    end.
 
-  Example ex1 :=
-    runCircuit
-      [Rule; GetIReq; GetIResp (Addi 1%bv 0%bv 3%bv); Rule;
-       Rule; Rule; GetIReq; GetIResp (Addi 2%bv 0%bv 4%bv);
-       Rule; Rule; Rule; GetIReq; GetIResp (Mul 3%bv 1%bv 2%bv);
-       Rule; Rule; Rule; Rule; Rule; Rule; Rule; Rule; Rule;
-       GetIReq; GetIResp (Mul 4%bv 3%bv 2%bv); Rule; Rule;
-       Rule; Rule; Rule; Rule; Rule; Rule
-      ].
+  (* Notation for RISC-V-like instructions *)
+  Declare Scope asm_scope.
+  Delimit Scope asm_scope with asm.
 
-  Eval vm_compute in ex1.
+  Notation "'li' rd , imm" := (Addi rd 5`0 imm)%bv (at level 0) : asm_scope.
+  Notation "'mv' rd , rs" := (Addi rd rs 0)%bv (at level 0) : asm_scope.
+  Notation "'addi' rd , rs1 , imm" := (Addi rd rs1 imm)%bv (at level 0) : asm_scope.
+  Notation "'add' rd , rs1 , rs2" := (Add rd rs1 rs2)%bv (at level 0) : asm_scope.
+  Notation "'mul' rd , rs1 , rs2" := (Mul rd rs1 rs2)%bv (at level 0) : asm_scope.
+  Notation "'nop'" := Nop (at level 0) : asm_scope.
+  Notation "'unk'" := Unknown (at level 0) : asm_scope.
+
+  Local Open Scope asm_scope.
+
+  Example ex1 := [
+      li x1, 127;
+      li x2, 1;
+      mul x3, x1, x2;
+      nop;
+      nop;
+      nop;
+      add x4, x3, x3
+    ].
+
+  Eval vm_compute in (execute ex1 mkAddMultiply).
+
+  Example ex2 := [
+      li x1, 15;
+      li x2, 30;
+      add x8, x1, x2;
+      mv x3, x8
+    ].
+
+  Eval vm_compute in (execute ex2 mkAddMultiply).
 End example.

@@ -3,36 +3,32 @@ From research Require Import base circuit.
 Section WithContext.
   Context (a : Type) `{Default a}.
 
-  Record Fifo := { fifoContents : Maybe a }.
-  Definition mkFifo := {| fifoContents := Invalid |}.
+  Record Fifo := { fifoContents : option a }.
+  Definition mkFifo := {| fifoContents := None |}.
 
-  Definition fifoNotEmpty s := bool_decide (s.(fifoContents) <> Invalid).
+  Definition fifoNotEmpty s := bool_decide (s.(fifoContents) <> None).
 
-  Definition fifoNotFull s := bool_decide (s.(fifoContents) = Invalid).
+  Definition fifoNotFull s := bool_decide (s.(fifoContents) = None).
 
   Definition fifoEnq x1 :=
     guard
       {{ fifoNotFull }}
-      {{ let%write _ := Valid x1 on fifoContents in
+      {{ let%write _ := Some x1 on fifoContents in
          pass
       }}.
 
   Definition fifoDeq :=
     guard
       {{ fifoNotEmpty }}
-      {{ let%write _ := Invalid on fifoContents in
+      {{ let%write _ := None on fifoContents in
          pass
       }}.
 
-  Definition fifoFirst :=
-    guard
-      {{ fifoNotEmpty }}
-      {{ let%read x := fifoContents in
-         match x with
-         | Valid x => ret x
-         | Invalid => ret δ
-         end
-      }}.
+  Definition fifoFirst st :=
+    match st.(fifoContents) with
+    | Some x => x
+    | None => δ
+    end.
 End WithContext.
 
 Arguments mkFifo {_}.

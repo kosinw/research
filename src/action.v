@@ -1,4 +1,5 @@
 From research Require Import base.
+From stdpp Require Import option.
 
 Section WithContext.
   Context {s : Type}.
@@ -28,13 +29,13 @@ Section WithContext.
   Definition guard {t} (b : s -> bool) (m : Action t) : Action t :=
     fun s => if b s then m s else fail s.
 
+  Definition lift {t} (o : option t) : Action t :=
+    fun s => option_map (fun x => (x, s)) o.
+
   Definition runAction {a} (m : Action a) (x : s) := m x.
 
-  Definition runAction1 {a} (m : Action a) :=
-    (option_map fst ∘ (runAction (a := a) m)).
-
-  Definition runAction2 {a} (m : Action a) :=
-    (option_map snd ∘ (runAction (a := a) m)).
+  Definition nextState {a} (m : Action a) (st : s) :=
+    default st ((option_map snd ∘ (runAction (a := a) m)) st).
 End WithContext.
 
 Declare Scope action_scope.
@@ -44,21 +45,16 @@ Local Open Scope action_scope.
 Infix ">>=" := bind (at level 60) : action_scope.
 Infix ">>|" := fmap (at level 60) : action_scope.
 
-(* Get a field from state *)
 Definition getField {s a} (getter : s -> a) : Action (s := s) a :=
-  get >>= (fun s => ret (getter s)).
+  get >>| getter.
 
-(* Run action on field and update state with result *)
 Definition call {s a b}
   (getter : s -> a)
   (setter : a -> s -> s)
   (action : Action (s := a) b) : Action (s := s) b :=
-  get >>= (fun s =>
-             match runAction action (getter s) with
-             | Some (x, s') =>
-                 put (setter s' s) >>= (fun _ => ret x)
-             | None => fail
-             end).
+  get >>= (fun st =>
+    lift (runAction action (getter st)) >>= (fun '(x, st') =>
+      put (setter st' st) >>| (fun _ => x))).
 
 Notation "'{{' e '}}'" := (e%action).
 
@@ -90,7 +86,7 @@ Notation "'let%call' x ':=' e1 'on' proj 'in' e2" :=
 
 Notation " 'when' c 'then' e " := (if c then e else pass) (at level 200) : action_scope.
 
-Global Hint Unfold get put modify fmap bind ret fail pass guard : core.
-Global Hint Unfold runAction runAction1 runAction2 : core.
+Global Hint Unfold get put modify fmap bind ret fail pass guard lift : core.
+Global Hint Unfold runAction nextState : core.
 Global Hint Unfold getField call : core.
 Global Hint Unfold option_map from_option : core.

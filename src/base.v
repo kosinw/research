@@ -22,22 +22,12 @@ Ltac simplify :=
 Ltac equality := intuition congruence.
 Ltac propositional := intuition.
 
-Notation Maybe := @option.
-Notation Valid := (@Some _).
-Notation Invalid := (@None _).
-Notation Bool := bool.
-Notation Vector := vec.
-
-Definition snoc {A} (x : A) (l : list A) := l ++ [x].
-
-Fixpoint mkVector {t} (zero : t) n {struct n} : Vector t n :=
-  match n with
-  | 0 => vnil
-  | S n => zero ::: mkVector zero n
-  end.
-
 Class Default A := default: A.
 Global Hint Mode Default ! : typeclass_instances.
 Notation "'δ'" := default (at level 0, format "δ").
 
 Global Instance default_inhabited `(Default A) : Inhabited A := populate δ.
+
+Instance bool__Default : Default bool := false.
+Instance nat__Default : Default nat := 0.
+Instance Z__Default : Default Z := 0%Z.
