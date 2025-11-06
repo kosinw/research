@@ -1,9 +1,3 @@
-(* *********************************************************************************)
-(*                                                                                 *)
-(*             bit.v - Bitvector helpers, notations, and lemmas.                   *)
-(*                                                                                 *)
-(***********************************************************************************)
-
 From research Require Import base.
 From stdpp Require Export bitvector.
 
@@ -21,10 +15,3 @@ Definition concat {n n1 n2} := bv_concat n (n1 := n1) (n2 := n2).
 Infix "++:" := concat (at level 60, right associativity) : bv_scope.
 
 Definition truncate1 {n} := truncate (n := n) (z := 1).
-
-Notation " n '`' z " :=
-  (Z_to_bv n z)
-    (at level 0, n constr, z constr at level 0,
-      format " n '`'  z ") : bv_scope.
-
-Instance defaultBit n : Default (Bit n) := bv_0 n.

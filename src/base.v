@@ -9,11 +9,12 @@
 (*                                                                                *)
 (**********************************************************************************)
 
-From stdpp Require Export base tactics list vector option options.
+From stdpp Require Export base tactics list vector option strings options.
 From RecordUpdate Require Export RecordUpdate.
 
 #[export] Set Printing Projections.
 #[export] Set Implicit Arguments.
+#[export] Set Default Goal Selector "1".
 #[export] Set Warnings "-notation-for-abbreviation".
 
 Ltac simplify :=
@@ -22,13 +23,4 @@ Ltac simplify :=
 Ltac equality := intuition congruence.
 Ltac propositional := intuition.
 
-Class Default A := default: A.
-Global Hint Mode Default ! : typeclass_instances.
-Notation "'δ'" := default (at level 0, format "δ").
-
-Global Instance default_inhabited `(Default A) : Inhabited A := populate δ.
-
-Instance bool__Default : Default bool := false.
-Instance nat__Default : Default nat := 0.
-Instance Z__Default : Default Z := 0%Z.
-Instance list__Default A : Default (list A) := [].
+Notation δ := inhabitant.

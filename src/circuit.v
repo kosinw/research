@@ -1,86 +1,179 @@
 From research Require Import base.
-From research Require Export action.
-From stdpp Require Import option.
 
-Class Circuit (s m tr : Type) :=
-  { mkCircuit : s
-  ; circuitCall : m -> @Action s unit
-  ; circuitTrace : s -> list tr
+Inductive ActionResult s t :=
+| Success : s -> t -> ActionResult s t
+| Failure : ActionResult s t.
+
+Arguments Success {_ _}.
+Arguments Failure {_ _}.
+
+Definition Action s t := s -> ActionResult s t.
+
+Definition ret {s t} (x : t) : Action s t := fun st => Success st x.
+
+Definition bind {s t1 t2} (m : Action s t1) (f : t1 -> Action s t2) :=
+  fun st =>
+    match m st with
+    | Success st' v1 => (f v1) st'
+    | Failure => Failure
+    end.
+
+Infix ">>=" := bind (at level 80, only parsing).
+
+Definition lift {s t1 t2} (f : t1 -> t2) (m : Action s t1) : Action s t2 :=
+  m >>= (fun x => ret (f x)).
+
+Notation "m >>| f" := (lift f m) (at level 80, only parsing).
+
+Definition pass {s} : Action s unit := ret tt.
+
+Definition abort {s t} : Action s t :=
+  fun st => Failure.
+
+Definition assert {s} (predicate : s -> bool) : Action s unit :=
+  fun st => if predicate st then pass st else abort st.
+
+Definition get {s} : Action s s := fun st => Success st st.
+
+Definition put {s} (st : s) : Action s unit := fun _ => Success st tt.
+
+Definition modify {s} (f : s -> s) : Action s unit := get >>= (fun st => put (f st)).
+
+Definition run {s t} `{Inhabited t} (m : Action s t) (st : s) :=
+  match m st with
+  | Success st' v => (st', v)
+  | Failure => (st, δ)
+  end.
+
+Definition call {s1 s2 t} (proj : s1 -> s2) (meth : Action s2 t)
+  `{Setter (R := s1) (T := s2) proj} : Action s1 t :=
+  get >>| proj >>=
+    fun st2 =>
+      match meth st2 with
+      | Success st2' v => modify (set proj (fun _ => st2')) >>= const (ret v)
+      | Failure => abort
+      end.
+
+Arguments call {_ _ _} (_ _) {_} (_).
+
+Declare Custom Entry bind_expr.
+Declare Custom Entry call_expr.
+
+Notation "'self'" :=
+  get (in custom bind_expr, only parsing).
+
+Notation "m .( proj )" :=
+  (m >>| proj)
+    (in custom bind_expr, proj constr, only parsing).
+
+Notation "'let%read' x ':=' e1 'in' e2" :=
+  (e1 >>= (fun x => e2))
+    (at level 80, x pattern, e1 custom bind_expr,
+      only parsing).
+
+Notation "'let%bind' x ':=' e1 'in' e2" :=
+  (e1 >>= (fun x => e2))
+    (at level 80, x pattern, only parsing).
+
+Notation "'let%map' x ':=' e1 'in' e2" :=
+  (e1 >>| (fun x => e2))
+    (at level 80, x pattern, e1 custom bind_expr,
+      only parsing).
+
+Notation "'self' ':=' e1" :=
+  (put e1)
+    (at level 200, e1 at level 80, only parsing).
+
+Notation "'self' '::=' e1" :=
+  (modify e1)
+    (at level 200, e1 at level 80, only parsing).
+
+Notation "'self' .( proj ) ':=' e1" :=
+  (modify (set proj (fun _ => e1)))
+    (at level 200, e1 at level 80, only parsing).
+
+Notation "'self' .( proj ) '::=' e1" :=
+  (modify (set proj e1))
+    (at level 200, e1 at level 80, only parsing).
+
+Notation "m1 ';;' m2" := (m1 >>= (fun _ => m2)) (only parsing).
+
+Notation "'self' .( proj ) .( meth )" :=
+  (call proj meth)
+    (in custom call_expr, proj constr, meth constr, only parsing).
+
+Notation "'let%call' x ':=' e1 'in' e2" :=
+  (e1 >>= (fun x => e2))
+    (at level 80, x pattern, e1 custom call_expr,
+      only parsing).
+
+Notation " 'when' c 'then' e " := (if c then e else pass) (at level 200).
+
+Definition hoare_triple {s t} (P : s -> Prop) (c : Action s t) (Q : t -> s -> Prop) := forall st,
+    P st ->
+    match c st with
+    | Success st' v => Q v st'
+    | Failure => True
+    end.
+
+Notation "{{ P }} c {{ Q }}" := (hoare_triple P c Q) (at level 90, c at next level).
+
+Theorem hoare_consequence {s t} : forall P (c : Action s t) Q P' Q',
+    {{ P }} c {{ Q }}
+    -> (forall st, P' st -> P st)
+    -> (forall v st, Q v st -> Q' v st)
+    -> {{ P' }} c {{ Q' }}.
+Proof.
+  cbv [ hoare_triple ].
+  intros.
+  specialize H with (st := st).
+  case_match; auto.
+Qed.
+
+Corollary hoare_strengthen {s t} : forall P (c : Action s t) Q Q',
+    {{ P }} c {{ Q }} -> (forall v st, Q v st -> Q' v st) -> {{ P }} c {{ Q' }}.
+Proof.
+  simplify.
+  eapply hoare_consequence; eauto.
+Qed.
+
+Record Method {s} a t :=
+  { methodName : string
+  ; methodBody : a -> Action s t
   }.
 
-Definition circuitStep `(c : Circuit s m tr) (method : m) (state : s) : s :=
-  nextState (circuitCall method) state.
+Notation " 'method' name ' x = body " :=
+  {| methodName := name; methodBody := (fun x => body) |}
+    (at level 100, x pattern).
 
-Definition circuitSteps `(c : Circuit s m tr) (ms : list m) (state : s) : s :=
-  fold_left (fun st m => circuitStep c m st) ms state.
+Inductive Methods {s} : list string -> Type :=
+| MethodsNil : Methods []
+| MethodsCons : forall a t (m : Method (s := s) a t) {names},
+    Methods names
+    -> Methods (methodName (s := s) (a := a) m :: names).
 
-Definition runCircuit `(c : Circuit s m tr) (ms : list m) : s :=
-  circuitSteps c ms mkCircuit.
+Arguments Methods : clear implicits.
 
-Lemma circuitStepsApp `(c: Circuit s m tr) : forall xs1 xs2 st,
-    circuitSteps c (xs1 ++ xs2) st =
-      circuitSteps c xs2 (circuitSteps c xs1 st).
-Proof.
-  cbv [circuitSteps].
-  intros ???.
-  rewrite fold_left_app.
-  equality.
-Qed.
+Record Circuit {names : list string} :=
+  { circuitState : Type
+  ; circuitConstructor : circuitState
+  ; circuitMethods : Methods circuitState names
+  }.
 
-Lemma runCircuitApp `(c: Circuit s m tr) : forall xs1 xs2,
-    runCircuit c (xs1 ++ xs2) =
-      circuitSteps c xs2 (runCircuit c xs1).
-Proof.
-  cbv [runCircuit].
-  intros ??.
-  apply circuitStepsApp.
-Qed.
+Arguments Circuit : clear implicits.
 
-Definition simulates {s1 s2 t1 t2} a1 a2 (R : s1 -> s2 -> Prop) :=
-  forall st1 st2,
-    R st1 st2 ->
-    (forall st1' st2',
-        st1' = nextState (a := t1) a1 st1 ->
-        st2' = nextState (a := t2) a2 st2 ->
-        R st1' st2').
+Notation "{{ 'rep' = state 'and' 'constructor' = constr ms }}" :=
+  {| circuitState := state;
+    circuitConstructor := constr;
+    circuitMethods := ms |}.
 
-Notation "m1 ⪯ m2 : R" := (simulates m1 m2 R) (at level 60, m2 at next level).
+Notation "'and' m1 'and' .. 'and' mn" :=
+  (MethodsCons m1 (.. (MethodsCons mn MethodsNil) ..)) (at level 101).
 
-Definition circuitSimulates `(c1: Circuit s1 m1 tr) `(c2: Circuit s2 m2 tr) p R
-  := forall m, c1.(circuitCall) m ⪯ c2.(circuitCall) (p m) : R.
+Definition counter :=
+  {{ rep = nat
+     and constructor = 0
+     and method "increment" '() = self ::= S
+  }}.
 
-Notation "c1 ∼ c2 : policy ; R" :=
-  (circuitSimulates c1 c2 policy R) (at level 60, c2 at next level).
-
-(* We say a circuit [c] is constant time relevant to some policy [policy],
-   if given the set of method calls to [c], we get the specification leakage
-   by applying policy [policy] to the series of method calls. If from the specification
-   leakage we can determine the implementation leakage trace, we get constant time
-   wrt [policy]. *)
-Definition constantTime {m2} `(c : Circuit s m1 tr) (policy : list m1 -> list m2) :=
-  exists f, forall xs, circuitTrace (runCircuit c xs) = f (policy xs).
-
-Lemma circuitConstantTime
-  `(c1 : Circuit s1 m1 tr)
-  `(c2 : Circuit s2 m2 tr) policy :
-  forall R, (c1 ∼ c2 : policy; R) ->
-       R c1.(mkCircuit) c2.(mkCircuit) ->
-       (forall st1 st2, R st1 st2 -> c1.(circuitTrace) st1 = c2.(circuitTrace) st2) ->
-       constantTime c1 (map policy).
-Proof.
-  intros R Hsimulates Hinit Htrace.
-  cbv [ constantTime circuitSimulates simulates ] in *.
-  exists (fun zs => circuitTrace (runCircuit c2 zs)).
-  intros.
-  apply Htrace.
-  induction xs using rev_ind.
-  - assumption.
-  - rewrite map_app.
-    rewrite !runCircuitApp.
-    simplify.
-    set (st1 := runCircuit c1 xs) in *.
-    set (st2 := runCircuit c2 (map policy xs)) in *.
-    apply Hsimulates with (st1 := st1) (st2 := st2) (m := x); equality.
-Qed.
-
-Arguments Circuit {_ _ _}.
+Eval vm_compute in counter.(circuitMethods).
