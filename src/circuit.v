@@ -44,10 +44,10 @@ Definition simulates {s1 s2 t1 t2} a1 a2 (R : s1 -> s2 -> Prop) :=
         st2' = nextState (a := t2) a2 st2 ->
         R st1' st2').
 
-Notation "m1 ≺ m2 : R" := (simulates m1 m2 R) (at level 60, m2 at next level).
+Notation "m1 ⪯ m2 : R" := (simulates m1 m2 R) (at level 60, m2 at next level).
 
 Definition circuitSimulates `(c1: Circuit s1 m1 tr) `(c2: Circuit s2 m2 tr) p R
-  := forall m, c1.(circuitCall) m ≺ c2.(circuitCall) (p m) : R.
+  := forall m, c1.(circuitCall) m ⪯ c2.(circuitCall) (p m) : R.
 
 Notation "c1 ∼ c2 : policy ; R" :=
   (circuitSimulates c1 c2 policy R) (at level 60, c2 at next level).

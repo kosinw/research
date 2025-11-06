@@ -29,11 +29,13 @@ Section WithContext.
     fun s => if b s then m s else fail s.
 
   Definition optionAction {t} (o : option t) : Action t :=
+    Eval cbv [ option_map ] in
     fun s => option_map (fun x => (x, s)) o.
 
   Definition runAction {a} (m : Action a) (x : s) := m x.
 
   Definition nextState {a} (m : Action a) (st : s) :=
+    Eval cbv [ option_map snd from_option compose runAction id ] in
     default st ((option_map snd ∘ (runAction (a := a) m)) st).
 End WithContext.
 
@@ -44,13 +46,15 @@ Local Open Scope action_scope.
 Infix ">>=" := bind (at level 60) : action_scope.
 Infix ">>|" := fmap (at level 60) : action_scope.
 
-Definition getField {s a} (getter : s -> a) : Action (s := s) a :=
+Definition read {s a} (getter : s -> a) : Action (s := s) a :=
+  Eval cbv [ get fmap ] in
   get >>| getter.
 
 Definition call {s a b}
   (getter : s -> a)
   (setter : a -> s -> s)
   (action : Action (s := a) b) : Action (s := s) b :=
+  Eval cbv [ bind get runAction optionAction put ] in
   get >>= (fun st =>
     optionAction (runAction action (getter st)) >>= (fun '(x, st') =>
       put (setter st' st) >>| (fun _ => x))).
@@ -66,7 +70,7 @@ Notation "'let%map' x ':=' e1 'in' e2" :=
     (at level 100, x pattern, e2 at level 200, right associativity) : action_scope.
 
 Notation "'let%read' x ':=' proj 'in' e2" :=
-  (getField proj >>= (fun x => e2))%action
+  (read proj >>= (fun x => e2))%action
     (at level 100, x at next level, e2 at level 200, right associativity) : action_scope.
 
 (* TODO knwabueze: Maybe make %write and %modify return the prior value?? *)
@@ -86,7 +90,5 @@ Notation "'let%call' x ':=' e1 'on' proj 'in' e2" :=
 Notation " 'when' c 'then' e " := (if c then e else pass) (at level 200) : action_scope.
 
 Global Hint Unfold get put modify fmap bind ret : core.
-Global Hint Unfold fail pass guard optionAction : core.
+Global Hint Unfold fail pass guard call read : core.
 Global Hint Unfold runAction : core.
-Global Hint Unfold getField call : core.
-Global Hint Unfold option_map from_option : core.

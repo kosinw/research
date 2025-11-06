@@ -17,7 +17,7 @@ From RecordUpdate Require Export RecordUpdate.
 #[export] Set Warnings "-notation-for-abbreviation".
 
 Ltac simplify :=
-  repeat progress (simpl in *; intros; autounfold with core in *; list_simplifier; subst).
+  repeat progress (simpl in *; intros; autounfold with core in *; list_simplifier).
 
 Ltac equality := intuition congruence.
 Ltac propositional := intuition.
@@ -31,3 +31,4 @@ Global Instance default_inhabited `(Default A) : Inhabited A := populate δ.
 Instance bool__Default : Default bool := false.
 Instance nat__Default : Default nat := 0.
 Instance Z__Default : Default Z := 0%Z.
+Instance list__Default A : Default (list A) := [].

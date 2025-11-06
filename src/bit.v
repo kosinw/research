@@ -27,4 +27,4 @@ Notation " n '`' z " :=
     (at level 0, n constr, z constr at level 0,
       format " n '`'  z ") : bv_scope.
 
-Instance defaultBit n : Default (Bit n) := n`0.
+Instance defaultBit n : Default (Bit n) := bv_0 n.

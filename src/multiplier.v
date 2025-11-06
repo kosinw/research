@@ -213,23 +213,29 @@ Section WithContext.
     | m : method |- _ => destruct m
     | |- context [ decide _ ] => case_decide
     | |- context [ bool_decide _ ] => case_bool_decide
-    | |- _ ≺ _ : _ => try eauto 8
+    | |- _ /\ _ => split
+    | |- _ ⪯ _ : _ => try eauto 8
     | _ => progress simplify
     end.
 
   Local Ltac t := repeat t0; solve [ equality | eauto 8 ].
 
-  Lemma multiplierEnqOk : forall a b, multiplierEnq a b ≺ multiplierSpecEnq a : rel.
+  Lemma multiplierEnqOk : forall a b, multiplierEnq a b ⪯ multiplierSpecEnq a : rel.
   Proof.
     cbv [ simulates multiplierEnq multiplierSpecEnq ]; t.
   Qed.
 
-  Lemma multiplierDeqOk : multiplierDeq ≺ multiplierSpecDeq : rel.
+  Lemma multiplierDeqOk : multiplierDeq ⪯ multiplierSpecDeq : rel.
   Proof.
     cbv [ simulates multiplierDeq multiplierSpecDeq ]; t.
   Qed.
 
-  Lemma multiplierRuleOk : multiplierRule ≺ multiplierSpecRule : rel.
+  Lemma multiplierShiftOk : multiplierShiftAndAdd ⪯ multiplierSpecShift : rel.
+  Proof.
+    cbv [ simulates multiplierShiftAndAdd multiplierSpecShift ]; t.
+  Qed.
+
+  Lemma multiplierRuleOk : multiplierRule ⪯ multiplierSpecRule : rel.
   Proof.
     cbv [ simulates multiplierRule multiplierSpecRule ]; t.
   Qed.
